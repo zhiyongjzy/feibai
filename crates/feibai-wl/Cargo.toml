@@ -6,9 +6,12 @@ edition = "2024"
 [dependencies]
 feibai-core = { path = "../feibai-core" }
 feibai-pinyin = { path = "../feibai-pinyin" }
+feibai-ui = { path = "../feibai-ui" }
 wayland-client = "0.31"
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 wayland-protocols = { version = "0.32", features = ["client"] }
 calloop = "0.13"
 calloop-wayland-source = "0.3"
 xkbcommon = { version = "0.8", features = ["wayland"] }
+rustix = { version = "1.1", features = ["shm", "fs"] }
+libc = "0.2"
