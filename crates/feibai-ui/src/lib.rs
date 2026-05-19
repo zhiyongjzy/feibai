@@ -1,5 +1,5 @@
 mod renderer;
-pub use renderer::{CandidateRenderer, RenderConfig, RenderedFrame};
+pub use renderer::{CandidateRenderer, RenderConfig, RenderedFrame, Theme};
 
 #[cfg(test)]
 mod tests {
