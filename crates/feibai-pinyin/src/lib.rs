@@ -122,4 +122,84 @@ mod tests {
         let actions = engine.process_key(&key);
         assert!(actions.iter().any(|a| matches!(a, EngineAction::Forward)));
     }
+
+    const KEYSYM_SHIFT_L: u32 = 0xffe1;
+
+    fn shift_press(engine: &mut PinyinEngine) -> Vec<EngineAction> {
+        engine.process_key(&KeyEvent {
+            keysym: KEYSYM_SHIFT_L,
+            unicode: None,
+            modifiers: Modifiers::default(),
+            state: KeyState::Press,
+        })
+    }
+
+    fn shift_release(engine: &mut PinyinEngine) -> Vec<EngineAction> {
+        engine.process_key(&KeyEvent {
+            keysym: KEYSYM_SHIFT_L,
+            unicode: None,
+            modifiers: Modifiers::default(),
+            state: KeyState::Release,
+        })
+    }
+
+    #[test]
+    fn test_shift_toggles_chinese_english() {
+        let mut engine = make_engine();
+        assert!(engine.is_chinese_mode());
+
+        // Shift press + release alone = toggle to english
+        shift_press(&mut engine);
+        shift_release(&mut engine);
+        assert!(!engine.is_chinese_mode());
+
+        // Again = toggle back to chinese
+        shift_press(&mut engine);
+        shift_release(&mut engine);
+        assert!(engine.is_chinese_mode());
+    }
+
+    #[test]
+    fn test_english_mode_forwards_all() {
+        let mut engine = make_engine();
+
+        // Switch to english
+        shift_press(&mut engine);
+        shift_release(&mut engine);
+        assert!(!engine.is_chinese_mode());
+
+        // All letter keys forward
+        let actions = press_key(&mut engine, 'a');
+        assert!(actions.iter().any(|a| matches!(a, EngineAction::Forward)));
+
+        let actions = press_key(&mut engine, 'z');
+        assert!(actions.iter().any(|a| matches!(a, EngineAction::Forward)));
+    }
+
+    #[test]
+    fn test_shift_with_other_key_does_not_toggle() {
+        let mut engine = make_engine();
+        assert!(engine.is_chinese_mode());
+
+        // Shift press, then another key, then shift release = no toggle
+        shift_press(&mut engine);
+        press_key(&mut engine, 'a'); // interrupts shift-alone
+        shift_release(&mut engine);
+
+        // Should still be chinese mode
+        assert!(engine.is_chinese_mode());
+    }
+
+    #[test]
+    fn test_switch_to_english_commits_preedit() {
+        let mut engine = make_engine();
+        press_key(&mut engine, 'n');
+        press_key(&mut engine, 'i');
+
+        // Switch to english — should commit "ni" as raw text
+        shift_press(&mut engine);
+        let actions = shift_release(&mut engine);
+        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "ni")));
+        assert!(!engine.is_chinese_mode());
+    }
 }
