@@ -1,0 +1,8 @@
+[package]
+name = "feibai-wl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+feibai-core = { path = "../feibai-core" }
+feibai-pinyin = { path = "../feibai-pinyin" }
