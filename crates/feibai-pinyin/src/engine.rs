@@ -8,6 +8,8 @@ pub struct PinyinEngine {
     table: HashMap<String, Vec<String>>,
     preedit: String,
     candidates: Vec<Candidate>,
+    chinese_mode: bool,
+    shift_pressed_alone: bool,
 }
 
 impl PinyinEngine {
@@ -40,6 +42,8 @@ impl PinyinEngine {
             table,
             preedit: String::new(),
             candidates: Vec::new(),
+            chinese_mode: true,
+            shift_pressed_alone: false,
         })
     }
 
@@ -58,19 +62,63 @@ impl PinyinEngine {
             })
             .unwrap_or_default();
     }
+
+    pub fn is_chinese_mode(&self) -> bool {
+        self.chinese_mode
+    }
 }
+
+const KEYSYM_SHIFT_L: u32 = 0xffe1;
+const KEYSYM_SHIFT_R: u32 = 0xffe2;
 
 impl Engine for PinyinEngine {
     fn process_key(&mut self, key: &KeyEvent) -> Vec<EngineAction> {
+        let keysym = key.keysym;
+
+        // Track Shift for toggle: press alone (no other key in between) = toggle
+        if keysym == KEYSYM_SHIFT_L || keysym == KEYSYM_SHIFT_R {
+            if key.state == KeyState::Press {
+                self.shift_pressed_alone = true;
+                return vec![EngineAction::Noop];
+            } else {
+                // Release — if no other key was pressed, toggle mode
+                if self.shift_pressed_alone {
+                    self.shift_pressed_alone = false;
+                    self.chinese_mode = !self.chinese_mode;
+                    // If switching to english, clear preedit
+                    if !self.chinese_mode && !self.preedit.is_empty() {
+                        let text = self.preedit.clone();
+                        self.preedit.clear();
+                        self.candidates.clear();
+                        return vec![
+                            EngineAction::Commit(text),
+                            EngineAction::UpdatePreedit(String::new()),
+                            EngineAction::UpdateCandidates(Vec::new()),
+                        ];
+                    }
+                    return vec![EngineAction::Noop];
+                }
+                return vec![EngineAction::Noop];
+            }
+        }
+
+        // Any non-shift key press cancels the "shift alone" tracking
+        if key.state == KeyState::Press {
+            self.shift_pressed_alone = false;
+        }
+
         if key.state == KeyState::Release {
             return vec![EngineAction::Noop];
+        }
+
+        // English mode — forward everything
+        if !self.chinese_mode {
+            return vec![EngineAction::Forward];
         }
 
         if key.modifiers.ctrl || key.modifiers.alt || key.modifiers.super_ {
             return vec![EngineAction::Forward];
         }
-
-        let keysym = key.keysym;
 
         // Escape
         if keysym == 0xff1b {
