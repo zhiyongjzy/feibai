@@ -125,7 +125,7 @@ impl Engine for PinyinEngine {
 
         // Digit 1-9 — select candidate
         if let Some(ch) = key.unicode {
-            if ch >= '1' && ch <= '9' && !self.candidates.is_empty() {
+            if ('1'..='9').contains(&ch) && !self.candidates.is_empty() {
                 let idx = (ch as usize) - ('1' as usize);
                 if let Some(c) = self.candidates.get(idx) {
                     let text = c.text.clone();
