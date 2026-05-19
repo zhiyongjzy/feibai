@@ -1,3 +1,4 @@
+mod ibus;
 mod popup;
 
 use wayland_client::protocol::{
@@ -446,13 +447,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let conn = Connection::connect_to_env()?;
-    let display = conn.display();
-    let mut event_queue = conn.new_event_queue();
-    let qh = event_queue.handle();
-
-    // All files under ~/.config/feibai/
+fn load_engine() -> PinyinEngine {
     let feibai_dir = dirs::config_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
         .join("feibai");
@@ -461,7 +456,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Scan for all *.dict.yaml in feibai dir and fallback locations
     let mut found_paths: Vec<String> = Vec::new();
 
-    // Primary: scan ~/.config/feibai/ for all dict.yaml files (base first)
     let base_in_dir = feibai_dir.join("feibai.base.dict.yaml");
     if base_in_dir.exists() {
         found_paths.push(base_in_dir.to_string_lossy().to_string());
@@ -480,7 +474,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Fallback: check other locations for base dict
     if found_paths.is_empty() {
         let fallback_dirs = [
             "data/dicts",
@@ -509,7 +502,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .expect("failed to load dicts");
 
-    // Set user dict path and load if exists
     let user_dict_path = feibai_dir.join("user.dict.txt");
     engine.set_userdb_path(&user_dict_path);
     if user_dict_path.exists() {
@@ -519,7 +511,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Load config
+    engine
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+
+    // --ibus flag forces IBus mode (launched by ibus-daemon)
+    if args.iter().any(|a| a == "--ibus") {
+        let engine = load_engine();
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(ibus::run_ibus(engine))?;
+        return Ok(());
+    }
+
+    // Auto-detect: try Wayland input-method-v2 first, fall back to IBus
+    let wayland_ok = Connection::connect_to_env().is_ok()
+        && std::env::var("WAYLAND_DISPLAY").is_ok();
+
+    if !wayland_ok {
+        eprintln!("[feibai] no Wayland display, trying IBus mode");
+        let engine = load_engine();
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(ibus::run_ibus(engine))?;
+        return Ok(());
+    }
+
+    // Wayland mode
+    let conn = Connection::connect_to_env()?;
+    let display = conn.display();
+    let mut event_queue = conn.new_event_queue();
+    let qh = event_queue.handle();
+
+    let engine = load_engine();
+
+    let feibai_dir = dirs::config_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
+        .join("feibai");
     let theme = load_theme_from_config(&feibai_dir);
     eprintln!("[feibai] theme: {:?}", theme_name(theme));
 

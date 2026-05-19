@@ -1,7 +1,11 @@
 [package]
-name = "feibai-wl"
+name = "feibai"
 version = "0.1.0"
 edition = "2024"
+
+[[bin]]
+name = "feibai"
+path = "src/main.rs"
 
 [dependencies]
 feibai-core = { path = "../feibai-core" }
@@ -18,3 +22,5 @@ libc = "0.2"
 dirs = "6"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "macros"] }

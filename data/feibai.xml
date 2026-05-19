@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component>
+    <name>org.freedesktop.IBus.Feibai</name>
+    <description>Feibai Pinyin Input Method</description>
+    <exec>feibai --ibus</exec>
+    <version>0.1.0</version>
+    <author>Jiang Zhiyong</author>
+    <license>MIT</license>
+    <homepage>https://github.com/jzy/feibai</homepage>
+    <textdomain>feibai</textdomain>
+    <engines>
+        <engine>
+            <name>feibai</name>
+            <language>zh</language>
+            <license>MIT</license>
+            <author>Jiang Zhiyong</author>
+            <icon></icon>
+            <layout>us</layout>
+            <longname>Feibai Pinyin</longname>
+            <description>Feibai - Simple Chinese Pinyin Input Method</description>
+            <rank>0</rank>
+            <symbol>飞</symbol>
+        </engine>
+    </engines>
+</component>
