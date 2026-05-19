@@ -124,29 +124,30 @@ impl Engine for PinyinEngine {
         }
 
         // Digit 1-9 — select candidate
-        if let Some(ch) = key.unicode {
-            if ('1'..='9').contains(&ch) && !self.candidates.is_empty() {
-                let idx = (ch as usize) - ('1' as usize);
-                if let Some(c) = self.candidates.get(idx) {
-                    let text = c.text.clone();
-                    self.preedit.clear();
-                    self.candidates.clear();
-                    return vec![EngineAction::Commit(text)];
-                }
-                return vec![EngineAction::Noop];
+        if let Some(ch) = key.unicode
+            && ('1'..='9').contains(&ch)
+            && !self.candidates.is_empty()
+        {
+            let idx = (ch as usize) - ('1' as usize);
+            if let Some(c) = self.candidates.get(idx) {
+                let text = c.text.clone();
+                self.preedit.clear();
+                self.candidates.clear();
+                return vec![EngineAction::Commit(text)];
             }
+            return vec![EngineAction::Noop];
         }
 
         // Letter keys — append to preedit
-        if let Some(ch) = key.unicode {
-            if ch.is_ascii_lowercase() {
-                self.preedit.push(ch);
-                self.lookup();
-                return vec![
-                    EngineAction::UpdatePreedit(self.preedit.clone()),
-                    EngineAction::UpdateCandidates(self.candidates.clone()),
-                ];
-            }
+        if let Some(ch) = key.unicode
+            && ch.is_ascii_lowercase()
+        {
+            self.preedit.push(ch);
+            self.lookup();
+            return vec![
+                EngineAction::UpdatePreedit(self.preedit.clone()),
+                EngineAction::UpdateCandidates(self.candidates.clone()),
+            ];
         }
 
         if self.preedit.is_empty() {
