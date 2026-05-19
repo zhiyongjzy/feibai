@@ -1,1 +1,0 @@
-/home/zhiyjia/code/github/jzy/feibai/target/debug/libfeibai_pinyin.rlib: /home/zhiyjia/code/github/jzy/feibai/crates/feibai-core/src/lib.rs /home/zhiyjia/code/github/jzy/feibai/crates/feibai-pinyin/src/lib.rs
