@@ -4,8 +4,10 @@ use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{
-    delegate_noop, Connection, Dispatch, QueueHandle, WEnum, event_created_child,
+    delegate_noop, Connection, Dispatch, QueueHandle, WEnum,
 };
+use std::io::Write;
+use std::os::unix::io::AsFd;
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_keyboard_grab_v2::{self, ZwpInputMethodKeyboardGrabV2},
     zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
@@ -21,6 +23,7 @@ use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use feibai_core::*;
 use feibai_pinyin::PinyinEngine;
+use feibai_ui::Theme;
 
 use popup::PopupWindow;
 
@@ -34,6 +37,7 @@ pub struct State {
     shm: Option<wl_shm::WlShm>,
     engine: PinyinEngine,
     popup: PopupWindow,
+    theme: Theme,
     serial: u32,
     active: bool,
     preedit_text: String,
@@ -41,6 +45,8 @@ pub struct State {
     xkb_context: xkbcommon::xkb::Context,
     xkb_state: Option<xkbcommon::xkb::State>,
     xkb_keymap: Option<xkbcommon::xkb::Keymap>,
+    vk_keymap_fd: Option<std::fs::File>,
+    forwarded_keys: std::collections::HashSet<u32>,
 }
 
 impl State {
@@ -50,23 +56,25 @@ impl State {
             None => return,
         };
 
+        let mut need_commit = false;
+
         for action in &actions {
             match action {
                 EngineAction::Commit(text) => {
                     im.commit_string(text.clone());
                     im.set_preedit_string(String::new(), 0, 0);
-                    im.commit(self.serial);
                     self.preedit_text.clear();
                     self.candidates.clear();
                     self.popup.hide();
+                    need_commit = true;
                     eprintln!("[feibai] commit: {}", text);
                 }
                 EngineAction::UpdatePreedit(text) => {
                     let len = text.len() as i32;
                     im.set_preedit_string(text.clone(), len, len);
-                    im.commit(self.serial);
                     self.preedit_text = text.clone();
                     self.update_popup(qh);
+                    need_commit = true;
                     eprintln!("[feibai] preedit: {}", text);
                 }
                 EngineAction::UpdateCandidates(candidates) => {
@@ -80,12 +88,13 @@ impl State {
                         eprintln!();
                     }
                 }
-                EngineAction::Forward => {
-                    // Forward is handled at the key event level
-                    // by sending the key via virtual_keyboard
-                }
+                EngineAction::Forward => {}
                 EngineAction::Noop => {}
             }
+        }
+
+        if need_commit {
+            im.commit(self.serial);
         }
     }
 
@@ -249,6 +258,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
                 state.preedit_text.clear();
                 state.candidates.clear();
                 state.popup.destroy();
+                state.forwarded_keys.clear();
             }
             zwp_input_method_v2::Event::Done => {
                 state.serial += 1;
@@ -257,9 +267,6 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
         }
     }
 
-    event_created_child!(State, ZwpInputMethodV2, [
-        zwp_input_method_v2::EVT_ACTIVATE_OPCODE => (ZwpInputMethodKeyboardGrabV2, ()),
-    ]);
 }
 
 // --- zwp_input_method_keyboard_grab_v2 ---
@@ -276,8 +283,12 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
         match event {
             zwp_input_method_keyboard_grab_v2::Event::Keymap { format, fd, size } => {
                 if format != WEnum::Value(wl_keyboard::KeymapFormat::XkbV1) {
+                    eprintln!("[feibai] keymap: unsupported format {:?}", format);
                     return;
                 }
+                eprintln!("[feibai] keymap event: size={}", size);
+
+                // Parse keymap with xkb first
                 let keymap = unsafe {
                     xkbcommon::xkb::Keymap::new_from_fd(
                         &state.xkb_context,
@@ -290,10 +301,39 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                 .ok()
                 .flatten();
                 if let Some(keymap) = keymap {
+                    // Create independent memfd for virtual keyboard
+                    // (can't reuse original fd — shared file offset would be at EOF after xkb read)
+                    if let Some(vk) = &state.virtual_keyboard {
+                        let keymap_str = keymap.get_as_string(xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1);
+                        let data = keymap_str.as_bytes();
+                        let vk_size = data.len() + 1; // null terminator required
+                        if let Ok(memfd) = rustix::fs::memfd_create(
+                            "feibai-keymap",
+                            rustix::fs::MemfdFlags::CLOEXEC,
+                        ) {
+                            let mut file = std::fs::File::from(memfd);
+                            let _ = rustix::fs::ftruncate(&file, vk_size as u64);
+                            let _ = file.write_all(data);
+                            let _ = file.write_all(&[0]);
+                            // Seek not needed — compositor uses mmap from offset 0
+                            vk.keymap(
+                                wl_keyboard::KeymapFormat::XkbV1 as u32,
+                                file.as_fd(),
+                                vk_size as u32,
+                            );
+                            state.vk_keymap_fd = Some(file);
+                            eprintln!("[feibai] vk keymap set ({} bytes)", vk_size);
+                        } else {
+                            eprintln!("[feibai] ERROR: memfd_create failed");
+                        }
+                    }
+
                     let xkb_state = xkbcommon::xkb::State::new(&keymap);
                     state.xkb_keymap = Some(keymap);
                     state.xkb_state = Some(xkb_state);
-                    eprintln!("[feibai] keymap loaded");
+                    eprintln!("[feibai] xkb keymap loaded");
+                } else {
+                    eprintln!("[feibai] ERROR: xkb keymap parse failed");
                 }
             }
             zwp_input_method_keyboard_grab_v2::Event::Key {
@@ -345,14 +385,41 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                     state: ks,
                 };
 
+                // Ctrl+Shift+T: cycle theme
+                if pressed && modifiers.ctrl && modifiers.shift && keysym.raw() == 0x54 {
+                    // 0x54 = 'T'
+                    state.theme = state.theme.next();
+                    state.popup.set_theme(state.theme);
+                    eprintln!("[feibai] theme switched to: {}", theme_name(state.theme));
+                    // Re-render popup if visible
+                    if !state.candidates.is_empty() {
+                        let qh = qh.clone();
+                        state.update_popup(&qh);
+                    }
+                    return;
+                }
+
+                // For key release: if we previously forwarded this key's press,
+                // forward the release too (so application stops repeat)
+                if !pressed && state.forwarded_keys.remove(&key) {
+                    if let (Some(vk), Some(_)) = (&state.virtual_keyboard, &state.vk_keymap_fd) {
+                        vk.key(time, key, 0);
+                    }
+                    // Still let engine see it (for shift tracking etc)
+                    state.engine.process_key(&key_event);
+                    return;
+                }
+
                 let actions = state.engine.process_key(&key_event);
 
-                // Check if any action is Forward
                 let should_forward = actions.iter().any(|a| matches!(a, EngineAction::Forward));
 
                 if should_forward {
-                    if let Some(vk) = &state.virtual_keyboard {
+                    if let (Some(vk), Some(_)) = (&state.virtual_keyboard, &state.vk_keymap_fd) {
                         vk.key(time, key, raw_state);
+                        if pressed {
+                            state.forwarded_keys.insert(key);
+                        }
                     }
                 } else {
                     let qh = qh.clone();
@@ -369,6 +436,10 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                 if let Some(xkb_state) = &mut state.xkb_state {
                     xkb_state.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
                 }
+                // Forward modifiers to virtual keyboard
+                if let (Some(vk), Some(_)) = (&state.virtual_keyboard, &state.vk_keymap_fd) {
+                    vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
+                }
             }
             _ => {}
         }
@@ -381,15 +452,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_queue = conn.new_event_queue();
     let qh = event_queue.handle();
 
-    let pinyin_paths = [
-        "data/pinyin_table.tsv",
-        "/usr/share/feibai/pinyin_table.tsv",
-        "/usr/local/share/feibai/pinyin_table.tsv",
-    ];
-    let engine = pinyin_paths
-        .iter()
-        .find_map(|p| PinyinEngine::from_file(p).ok())
-        .expect("cannot find pinyin_table.tsv");
+    // All files under ~/.config/feibai/
+    let feibai_dir = dirs::config_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
+        .join("feibai");
+    eprintln!("[feibai] dir: {}", feibai_dir.display());
+
+    // Scan for all *.dict.yaml in feibai dir and fallback locations
+    let mut found_paths: Vec<String> = Vec::new();
+
+    // Primary: scan ~/.config/feibai/ for all dict.yaml files (base first)
+    let base_in_dir = feibai_dir.join("feibai.base.dict.yaml");
+    if base_in_dir.exists() {
+        found_paths.push(base_in_dir.to_string_lossy().to_string());
+    }
+    if let Ok(entries) = std::fs::read_dir(&feibai_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.ends_with(".dict.yaml") && name != "feibai.base.dict.yaml" {
+                    let p = path.to_string_lossy().to_string();
+                    if !found_paths.contains(&p) {
+                        found_paths.push(p);
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: check other locations for base dict
+    if found_paths.is_empty() {
+        let fallback_dirs = [
+            "data/dicts",
+            "/usr/share/feibai/dicts",
+            "/usr/local/share/feibai/dicts",
+        ];
+        for dir in &fallback_dirs {
+            let p = format!("{}/feibai.base.dict.yaml", dir);
+            if std::path::Path::new(&p).exists() {
+                found_paths.push(p);
+                break;
+            }
+        }
+    }
+
+    if found_paths.is_empty() {
+        eprintln!("[feibai] ERROR: cannot find any dict files in {}", feibai_dir.display());
+        eprintln!("[feibai] place feibai.base.dict.yaml in ~/.config/feibai/");
+        std::process::exit(1);
+    }
+    for p in &found_paths {
+        eprintln!("[feibai] loading dict: {}", p);
+    }
+    let mut engine = PinyinEngine::from_files(
+        &found_paths.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+    )
+    .expect("failed to load dicts");
+
+    // Set user dict path and load if exists
+    let user_dict_path = feibai_dir.join("user.dict.txt");
+    engine.set_userdb_path(&user_dict_path);
+    if user_dict_path.exists() {
+        eprintln!("[feibai] loading user dict: {}", user_dict_path.display());
+        if let Err(e) = engine.load_userdb(&user_dict_path) {
+            eprintln!("[feibai] WARNING: {}", e);
+        }
+    }
+
+    // Load config
+    let theme = load_theme_from_config(&feibai_dir);
+    eprintln!("[feibai] theme: {:?}", theme_name(theme));
 
     let mut state = State {
         im_manager: None,
@@ -400,7 +532,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         compositor: None,
         shm: None,
         engine,
-        popup: PopupWindow::new(),
+        popup: PopupWindow::new_with_theme(theme),
+        theme,
         serial: 0,
         active: false,
         preedit_text: String::new(),
@@ -408,6 +541,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         xkb_context: xkbcommon::xkb::Context::new(xkbcommon::xkb::CONTEXT_NO_FLAGS),
         xkb_state: None,
         xkb_keymap: None,
+        vk_keymap_fd: None,
+        forwarded_keys: std::collections::HashSet::new(),
     };
 
     display.get_registry(&qh, ());
@@ -432,6 +567,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("[feibai] WARNING: no virtual keyboard support, key forwarding disabled");
     }
 
+    // Virtual keyboard needs a keymap before it can send keys
+    // We'll set it when we receive the keymap from the grab
+
     event_queue.roundtrip(&mut state)?;
 
     let mut event_loop: EventLoop<State> = EventLoop::try_new()?;
@@ -440,4 +578,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("[feibai] running");
     event_loop.run(None, &mut state, |_| {})?;
     Ok(())
+}
+
+fn load_theme_from_config(config_dir: &std::path::Path) -> Theme {
+    let config_path = config_dir.join("config.toml");
+    if let Ok(content) = std::fs::read_to_string(&config_path) {
+        if let Ok(table) = content.parse::<toml::Table>() {
+            if let Some(name) = table.get("theme").and_then(|v| v.as_str()) {
+                return theme_from_name(name);
+            }
+        }
+    }
+    Theme::Light
+}
+
+fn theme_from_name(name: &str) -> Theme {
+    match name.to_lowercase().as_str() {
+        "dark" => Theme::Dark,
+        "flat" => Theme::Flat,
+        "blue" => Theme::Blue,
+        "sakura" => Theme::Sakura,
+        "ocean" => Theme::Ocean,
+        "lavender" => Theme::Lavender,
+        "tangerine" => Theme::Tangerine,
+        "mint" => Theme::Mint,
+        _ => Theme::Light,
+    }
+}
+
+fn theme_name(theme: Theme) -> &'static str {
+    match theme {
+        Theme::Light => "light",
+        Theme::Dark => "dark",
+        Theme::Flat => "flat",
+        Theme::Blue => "blue",
+        Theme::Sakura => "sakura",
+        Theme::Ocean => "ocean",
+        Theme::Lavender => "lavender",
+        Theme::Tangerine => "tangerine",
+        Theme::Mint => "mint",
+    }
 }

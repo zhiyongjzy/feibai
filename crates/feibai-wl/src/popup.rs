@@ -9,7 +9,7 @@ use wayland_protocols_misc::zwp_input_method_v2::client::{
 };
 
 use feibai_core::Candidate;
-use feibai_ui::{CandidateRenderer, RenderConfig, RenderedFrame};
+use feibai_ui::{CandidateRenderer, RenderedFrame, Theme};
 
 use crate::State;
 
@@ -20,12 +20,14 @@ pub struct PopupWindow {
     pool: Option<wl_shm_pool::WlShmPool>,
     pool_fd: Option<File>,
     pool_size: usize,
+    buf_width: u32,
+    buf_height: u32,
     renderer: CandidateRenderer,
     visible: bool,
 }
 
 impl PopupWindow {
-    pub fn new() -> Self {
+    pub fn new_with_theme(theme: Theme) -> Self {
         Self {
             surface: None,
             popup: None,
@@ -33,9 +35,15 @@ impl PopupWindow {
             pool: None,
             pool_fd: None,
             pool_size: 0,
-            renderer: CandidateRenderer::new(RenderConfig::default()),
+            buf_width: 0,
+            buf_height: 0,
+            renderer: CandidateRenderer::new(theme.config()),
             visible: false,
         }
+    }
+
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.renderer.set_config(theme.config());
     }
 
     pub fn create_surface(
@@ -138,9 +146,17 @@ impl PopupWindow {
             self.pool_fd = Some(fd);
             self.pool = Some(pool);
             self.pool_size = size;
+            self.buf_width = 0;
+            self.buf_height = 0;
         }
 
-        // Create buffer from pool
+        // Recreate buffer if dimensions changed
+        if self.buf_width != frame.width || self.buf_height != frame.height {
+            if let Some(buf) = self.buffer.take() {
+                buf.destroy();
+            }
+        }
+
         if self.buffer.is_none()
             && let Some(pool) = &self.pool
         {
@@ -154,6 +170,8 @@ impl PopupWindow {
                 (),
             );
             self.buffer = Some(buf);
+            self.buf_width = frame.width;
+            self.buf_height = frame.height;
         }
 
         // Write pixel data to mmap
