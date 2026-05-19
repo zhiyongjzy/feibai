@@ -1,10 +1,27 @@
 # 飞白 (feibai) Phase 1 实现计划
 
-> 目标：在 COSMIC/Sway 下通过 input-method-v2 完成"拼音→选字→提交"完整流程。
+> 目标：在 COSMIC/Sway 下通过 input-method-v2 完成"拼音→选字→提交"完整流程，含候选窗口。
 
-**架构**：三层分离 — Frontend(Wayland) / Core(traits+dispatch) / Engine(pinyin HashMap)
+**架构**：四层分离 — Frontend(Wayland/IBus/XIM) / UI(共享渲染) / Core(traits+dispatch) / Engine(pinyin)
 
-**技术栈**：wayland-client 0.31, wayland-protocols-misc 0.3, calloop 0.14, xkbcommon 0.9
+```
+feibai/
+├── crates/
+│   ├── feibai-core/       # Engine trait, KeyEvent, EngineAction
+│   ├── feibai-pinyin/     # 拼音引擎
+│   ├── feibai-ui/         # 共享 UI 渲染（cosmic-text + tiny-skia → pixel buffer）
+│   ├── feibai-wl/         # Wayland frontend（input-method-v2 + input_popup_surface）
+│   ├── feibai-ibus/       # Phase 4: GNOME IBus frontend
+│   └── feibai-xim/        # Phase 4: XWayland XIM frontend
+└── data/
+```
+
+UI 层设计原则：`feibai-ui` 只做纯渲染（候选列表 → RGBA buffer），不涉及窗口管理。各前端拿到 buffer 后用自己的窗口机制上屏：
+- `feibai-wl`: `input_popup_surface_v2` + `wl_shm`
+- `feibai-ibus`: IBus LookupTable 或 GTK window（Phase 4）
+- `feibai-xim`: X11 override-redirect window（Phase 4）
+
+**技术栈**：wayland-client 0.31, wayland-protocols-misc 0.3, calloop 0.13, xkbcommon 0.8, cosmic-text, tiny-skia
 
 **开发环境**：本地编译，远程 `jzy@192.168.66.66` (Arch, COSMIC 1.0.13, Rust 1.95) 测试
 
@@ -626,6 +643,231 @@ ssh jzy@192.168.66.66 "WAYLAND_DISPLAY=wayland-1 ./target/release/feibai-wl"
 # 2. 打开终端/编辑器，输入 "nihao" 看到 preedit 下划线
 # 3. 按空格提交 "你好"
 # 4. Ctrl+C 等快捷键不被吃掉
+```
+
+---
+
+## Task 6: feibai-ui 共享渲染 crate
+
+**目标**：独立的 UI 渲染模块，输入候选数据，输出 RGBA pixel buffer。不含任何窗口管理逻辑。
+
+**Files:**
+- Create: `crates/feibai-ui/Cargo.toml`
+- Create: `crates/feibai-ui/src/lib.rs`
+- Create: `crates/feibai-ui/src/renderer.rs`
+
+### Step 1: 创建 feibai-ui crate
+
+```toml
+# crates/feibai-ui/Cargo.toml
+[package]
+name = "feibai-ui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+feibai-core = { path = "../feibai-core" }
+tiny-skia = "0.11"
+cosmic-text = "0.12"
+```
+
+### Step 2: 定义渲染接口
+
+```rust
+// crates/feibai-ui/src/lib.rs
+mod renderer;
+pub use renderer::{CandidateRenderer, RenderConfig, RenderedFrame};
+
+/// 渲染输出：一帧 RGBA pixel buffer
+pub struct RenderedFrame {
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,  // ARGB8888, len = width * height * 4
+}
+
+/// 渲染配置
+pub struct RenderConfig {
+    pub font_size: f32,       // 候选字号，默认 16.0
+    pub bg_color: [u8; 4],    // 背景 ARGB
+    pub fg_color: [u8; 4],    // 文字 ARGB
+    pub highlight_color: [u8; 4], // 选中高亮 ARGB
+    pub preedit_color: [u8; 4],   // preedit 颜色
+    pub padding: u32,         // 内边距
+    pub max_candidates: usize, // 最多显示几个候选
+}
+```
+
+### Step 3: 实现渲染器
+
+```rust
+// crates/feibai-ui/src/renderer.rs
+use cosmic_text::{FontSystem, SwashCache, Buffer, Metrics, Attrs};
+use tiny_skia::{Pixmap, Paint, Transform, FillRule};
+use feibai_core::Candidate;
+
+pub struct CandidateRenderer {
+    font_system: FontSystem,
+    swash_cache: SwashCache,
+    config: RenderConfig,
+}
+
+impl CandidateRenderer {
+    pub fn new(config: RenderConfig) -> Self { ... }
+
+    /// 输入候选列表 + preedit，输出一帧 RGBA buffer
+    /// 返回 None 表示无需显示（候选为空）
+    pub fn render(&mut self, preedit: &str, candidates: &[Candidate], selected: usize) -> Option<RenderedFrame> { ... }
+}
+```
+
+渲染布局：
+```
+┌───────────────────────────────┐
+│ ni                            │  ← preedit（小字，preedit_color）
+│ 1.你  2.妮  3.尼  4.泥  5.逆  │  ← 候选（大字，selected 高亮）
+└───────────────────────────────┘
+```
+
+渲染流程：
+1. `cosmic_text::Buffer` 排版文字，计算宽高
+2. `tiny-skia::Pixmap::new(width, height)` 创建画布
+3. 画圆角矩形背景
+4. 遍历 glyph → `SwashCache` 光栅化 → 画到 pixmap
+5. 返回 `RenderedFrame { width, height, data: pixmap.data().to_vec() }`
+
+### Step 4: 单元测试
+
+```rust
+#[test]
+fn test_render_produces_non_empty_buffer() {
+    let mut renderer = CandidateRenderer::new(RenderConfig::default());
+    let candidates = vec![
+        Candidate { text: "你".into(), comment: None },
+        Candidate { text: "妮".into(), comment: None },
+    ];
+    let frame = renderer.render("ni", &candidates, 0).unwrap();
+    assert!(frame.width > 0 && frame.height > 0);
+    assert_eq!(frame.data.len(), (frame.width * frame.height * 4) as usize);
+    // 不全是背景色（说明画了文字）
+    assert!(frame.data.chunks(4).any(|px| px != &renderer.config.bg_color));
+}
+```
+
+### Step 5: Commit
+
+```bash
+git add crates/feibai-ui/ && git commit -m "feat: feibai-ui shared rendering crate"
+```
+
+---
+
+## Task 7: 候选窗口集成到 feibai-wl
+
+**目标**：在 Wayland frontend 中使用 `input_popup_surface_v2` + `wl_shm` 显示 feibai-ui 渲染的 buffer。
+
+**Files:**
+- Create: `crates/feibai-wl/src/popup.rs`
+- Modify: `crates/feibai-wl/src/main.rs`
+- Modify: `crates/feibai-wl/Cargo.toml`
+
+### Step 1: 添加依赖
+
+```toml
+# 追加到 crates/feibai-wl/Cargo.toml
+feibai-ui = { path = "../feibai-ui" }
+```
+
+### Step 2: 绑定 wl_compositor + wl_shm
+
+在 registry handler 中额外绑定：
+- `wl_compositor` — 创建 popup 用的 `wl_surface`
+- `wl_shm` — 创建 shm buffer pool
+
+### Step 3: 实现 popup.rs — PopupWindow 结构
+
+```rust
+// crates/feibai-wl/src/popup.rs
+
+/// Wayland 候选窗口（负责窗口生命周期，渲染委托给 feibai-ui）
+pub struct PopupWindow {
+    surface: Option<WlSurface>,
+    popup: Option<ZwpInputPopupSurfaceV2>,
+    buffer: Option<WlBuffer>,
+    pool: Option<WlShmPool>,
+    mmap: Option<MmapMut>,
+    renderer: CandidateRenderer,
+    visible: bool,
+}
+
+impl PopupWindow {
+    /// 显示候选框：调用 renderer 获取 pixel buffer → 写入 shm → attach + commit
+    pub fn show(&mut self, preedit: &str, candidates: &[Candidate], selected: usize) { ... }
+
+    /// 隐藏候选框：attach null buffer + commit
+    pub fn hide(&mut self) { ... }
+}
+```
+
+### Step 4: 创建 popup surface
+
+```rust
+// 在 activate 时创建
+let surface = compositor.create_surface(qh, ());
+let popup = input_method.get_input_popup_surface(&surface, qh, ());
+// compositor 自动定位到光标旁
+```
+
+### Step 5: wl_shm buffer 管理
+
+```rust
+fn update_shm_buffer(&mut self, frame: &RenderedFrame) {
+    let stride = frame.width * 4;
+    let size = (stride * frame.height) as i32;
+    // 重新创建或复用 pool
+    // 将 frame.data 写入 mmap
+    // surface.attach(buffer) + surface.commit()
+}
+```
+
+### Step 6: 集成到 handle_engine_actions
+
+```rust
+EngineAction::UpdateCandidates(candidates) => {
+    if candidates.is_empty() {
+        popup.hide();
+    } else {
+        popup.show(&preedit, &candidates, 0);
+    }
+}
+EngineAction::Commit(_) => {
+    popup.hide();
+}
+```
+
+### Step 7: 处理 ZwpInputPopupSurfaceV2 事件
+
+```rust
+impl Dispatch<ZwpInputPopupSurfaceV2, ()> for State {
+    fn event(...) {
+        // text_input_rectangle — compositor 通知文本区域位置
+        // 可用于调整 popup 大小，但定位由 compositor 负责
+    }
+}
+```
+
+### Step 8: 编译 + 远程测试
+
+```bash
+cargo build -p feibai-wl
+# 推送到远程，启动，输入拼音
+# 预期：光标旁出现候选框，显示 preedit + 编号候选
+# 选字后候选框消失
+```
+
+### Step 9: Commit
+
+```bash
+git add -A && git commit -m "feat: candidate popup window via input_popup_surface_v2"
 ```
 
 ---
