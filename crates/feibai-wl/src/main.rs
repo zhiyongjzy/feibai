@@ -12,6 +12,10 @@ use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_v2::{self, ZwpInputMethodV2},
     zwp_input_popup_surface_v2::{self, ZwpInputPopupSurfaceV2},
 };
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
+    zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+    zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
+};
 
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
@@ -22,6 +26,8 @@ use popup::PopupWindow;
 
 pub struct State {
     im_manager: Option<ZwpInputMethodManagerV2>,
+    vk_manager: Option<ZwpVirtualKeyboardManagerV1>,
+    virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
     input_method: Option<ZwpInputMethodV2>,
     seat: Option<wl_seat::WlSeat>,
     compositor: Option<wl_compositor::WlCompositor>,
@@ -74,7 +80,10 @@ impl State {
                         eprintln!();
                     }
                 }
-                EngineAction::Forward => {}
+                EngineAction::Forward => {
+                    // Forward is handled at the key event level
+                    // by sending the key via virtual_keyboard
+                }
                 EngineAction::Noop => {}
             }
         }
@@ -127,6 +136,13 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                     state.shm = Some(shm);
                     eprintln!("[feibai] bound wl_shm");
                 }
+                "zwp_virtual_keyboard_manager_v1" => {
+                    let mgr = registry.bind::<ZwpVirtualKeyboardManagerV1, _, _>(
+                        name, version.min(1), qh, (),
+                    );
+                    state.vk_manager = Some(mgr);
+                    eprintln!("[feibai] bound zwp_virtual_keyboard_manager_v1");
+                }
                 _ => {}
             }
         }
@@ -161,6 +177,11 @@ delegate_noop!(State: ignore wl_compositor::WlCompositor);
 // --- wl_shm ---
 
 delegate_noop!(State: ignore wl_shm::WlShm);
+
+// --- virtual keyboard ---
+
+delegate_noop!(State: ignore ZwpVirtualKeyboardManagerV1);
+delegate_noop!(State: ignore ZwpVirtualKeyboardV1);
 
 // --- wl_shm_pool ---
 
@@ -277,7 +298,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
             }
             zwp_input_method_keyboard_grab_v2::Event::Key {
                 serial: _,
-                time: _,
+                time,
                 key,
                 state: key_state,
             } => {
@@ -296,6 +317,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
 
                 let pressed = key_state == WEnum::Value(wl_keyboard::KeyState::Pressed);
                 let ks = if pressed { KeyState::Press } else { KeyState::Release };
+                let raw_state = if pressed { 1u32 } else { 0u32 };
 
                 let modifiers = Modifiers {
                     ctrl: xkb_state.mod_name_is_active(
@@ -324,8 +346,18 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                 };
 
                 let actions = state.engine.process_key(&key_event);
-                let qh = qh.clone();
-                state.handle_engine_actions(actions, &qh);
+
+                // Check if any action is Forward
+                let should_forward = actions.iter().any(|a| matches!(a, EngineAction::Forward));
+
+                if should_forward {
+                    if let Some(vk) = &state.virtual_keyboard {
+                        vk.key(time, key, raw_state);
+                    }
+                } else {
+                    let qh = qh.clone();
+                    state.handle_engine_actions(actions, &qh);
+                }
             }
             zwp_input_method_keyboard_grab_v2::Event::Modifiers {
                 serial: _,
@@ -361,6 +393,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut state = State {
         im_manager: None,
+        vk_manager: None,
+        virtual_keyboard: None,
         input_method: None,
         seat: None,
         compositor: None,
@@ -387,6 +421,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         eprintln!("[feibai] ERROR: compositor does not support input-method-v2 or no seat found");
         std::process::exit(1);
+    }
+
+    // Create virtual keyboard for forwarding keys
+    if let (Some(vk_mgr), Some(seat)) = (&state.vk_manager, &state.seat) {
+        let vk = vk_mgr.create_virtual_keyboard(seat, &qh, ());
+        state.virtual_keyboard = Some(vk);
+        eprintln!("[feibai] created virtual keyboard");
+    } else {
+        eprintln!("[feibai] WARNING: no virtual keyboard support, key forwarding disabled");
     }
 
     event_queue.roundtrip(&mut state)?;
