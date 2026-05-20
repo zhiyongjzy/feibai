@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use feibai_core::*;
@@ -10,6 +9,8 @@ struct DictEntry {
     weight: u64,
 }
 
+const PAGE_SIZE: usize = 9;
+
 pub struct PinyinEngine {
     table: HashMap<String, Vec<DictEntry>>,
     syllables: HashSet<&'static str>,
@@ -18,6 +19,7 @@ pub struct PinyinEngine {
     selected_words: Vec<String>,
     selected_seg_counts: Vec<usize>,
     candidates: Vec<Candidate>,
+    page: usize,
     chinese_mode: bool,
     shift_pressed_alone: bool,
     userdb_path: Option<PathBuf>,
@@ -33,6 +35,7 @@ impl PinyinEngine {
             selected_words: Vec::new(),
             selected_seg_counts: Vec::new(),
             candidates: Vec::new(),
+            page: 0,
             chinese_mode: true,
             shift_pressed_alone: false,
             userdb_path: None,
@@ -132,7 +135,6 @@ impl PinyinEngine {
             if line.starts_with('#') || line.trim().is_empty() {
                 continue;
             }
-            // Format: "pinyin syllables \tword\tc=N d=... t=..."
             let mut parts = line.splitn(3, '\t');
             let pinyin_raw = match parts.next() {
                 Some(p) if !p.is_empty() => p.trim(),
@@ -151,10 +153,15 @@ impl PinyinEngine {
 
             let key: String = pinyin_raw.split_whitespace().collect();
 
-            self.table.entry(key).or_default().push(DictEntry {
-                word: word.to_string(),
-                weight,
-            });
+            let entries = self.table.entry(key).or_default();
+            if let Some(existing) = entries.iter_mut().find(|e| e.word == word) {
+                existing.weight = existing.weight.saturating_add(weight);
+            } else {
+                entries.push(DictEntry {
+                    word: word.to_string(),
+                    weight,
+                });
+            }
         }
     }
 
@@ -177,18 +184,28 @@ impl PinyinEngine {
         let remaining = &self.segments[self.total_selected_segs()..];
         if remaining.is_empty() {
             self.candidates = Vec::new();
+            self.page = 0;
             return;
         }
 
         let n = remaining.len();
         self.candidates = Vec::new();
-        let mut seen = HashSet::new();
+        self.page = 0;
 
-        // From longest match down to single syllable, collect candidates
+        // Viterbi DP: find best sentence covering all syllables
+        let sentence = self.viterbi_best_sentence(remaining);
+
+        // Collect word candidates for the first span (traditional behavior)
+        let mut seen = HashSet::new();
+        if let Some(ref s) = sentence {
+            seen.insert(s.clone());
+            self.candidates.push(Candidate { text: s.clone(), comment: None });
+        }
+
         for end in (1..=n.min(8)).rev() {
             let key: String = remaining[..end].concat();
             if let Some(entries) = self.table.get(&key) {
-                for e in entries.iter().take(9 - self.candidates.len()) {
+                for e in entries.iter() {
                     if seen.insert(e.word.clone()) {
                         self.candidates.push(Candidate {
                             text: e.word.clone(),
@@ -196,19 +213,103 @@ impl PinyinEngine {
                         });
                     }
                 }
-                if self.candidates.len() >= 9 {
-                    break;
+            }
+        }
+
+        let segs_str: String = remaining.join("'");
+        let top5: Vec<&str> = self.candidates.iter().take(5).map(|c| c.text.as_str()).collect();
+        eprintln!("[feibai] lookup: {} → [{}] ({}个)", segs_str, top5.join(", "), self.candidates.len());
+    }
+
+    /// Viterbi DP: find the best sentence that covers all remaining syllables
+    fn viterbi_best_sentence(&self, segs: &[String]) -> Option<String> {
+        let n = segs.len();
+        if n <= 1 {
+            return None;
+        }
+
+        // dp[i] = (best_score, num_words, prev_position) for position i
+        // score = sum of log(weight) for each word in the path
+        // prefer fewer words (longer matches), break ties by score
+        let mut dp_score: Vec<f64> = vec![f64::NEG_INFINITY; n + 1];
+        let mut dp_words: Vec<usize> = vec![usize::MAX; n + 1];
+        let mut dp_prev: Vec<usize> = vec![0; n + 1];
+        let mut dp_word_text: Vec<String> = vec![String::new(); n + 1];
+
+        dp_score[0] = 0.0;
+        dp_words[0] = 0;
+
+        for i in 0..n {
+            if dp_score[i] == f64::NEG_INFINITY {
+                continue;
+            }
+            let max_len = (n - i).min(8);
+            for len in 1..=max_len {
+                let key: String = segs[i..i + len].concat();
+                if let Some(entries) = self.table.get(&key) {
+                    if let Some(best) = entries.first() {
+                        let word_score = (best.weight.max(1) as f64).ln();
+                        let new_score = dp_score[i] + word_score;
+                        let new_words = dp_words[i] + 1;
+                        let j = i + len;
+
+                        // Prefer fewer words; if same word count, prefer higher score
+                        let better = dp_score[j] == f64::NEG_INFINITY
+                            || new_words < dp_words[j]
+                            || (new_words == dp_words[j] && new_score > dp_score[j]);
+
+                        if better {
+                            dp_score[j] = new_score;
+                            dp_words[j] = new_words;
+                            dp_prev[j] = i;
+                            dp_word_text[j] = best.word.clone();
+                        }
+                    }
                 }
             }
         }
+
+        if dp_score[n] == f64::NEG_INFINITY {
+            return None;
+        }
+
+        // Backtrace
+        let mut words = Vec::new();
+        let mut pos = n;
+        while pos > 0 {
+            words.push(dp_word_text[pos].clone());
+            pos = dp_prev[pos];
+        }
+        words.reverse();
+
+        let sentence: String = words.concat();
+        // Only return if sentence is longer than a single word (otherwise it duplicates normal candidates)
+        if words.len() > 1 {
+            Some(sentence)
+        } else {
+            None
+        }
     }
 
-    /// Select a candidate: consume the corresponding syllables, or commit if done
+    fn current_page_candidates(&self) -> Vec<Candidate> {
+        let start = self.page * PAGE_SIZE;
+        let end = (start + PAGE_SIZE).min(self.candidates.len());
+        if start >= self.candidates.len() {
+            return Vec::new();
+        }
+        self.candidates[start..end].to_vec()
+    }
+
+    fn total_pages(&self) -> usize {
+        (self.candidates.len() + PAGE_SIZE - 1) / PAGE_SIZE
+    }
+
     fn select_candidate(&mut self, idx: usize) -> Vec<EngineAction> {
         let text = match self.candidates.get(idx) {
             Some(c) => c.text.clone(),
             None => return vec![EngineAction::Noop],
         };
+        eprintln!("[feibai] select[{}]: {}", idx, text);
 
         let offset = self.total_selected_segs();
         let remaining = &self.segments[offset..];
@@ -231,7 +332,7 @@ impl PinyinEngine {
         let preedit_display = self.compose_preedit();
         vec![
             EngineAction::UpdatePreedit(preedit_display),
-            EngineAction::UpdateCandidates(self.candidates.clone()),
+            EngineAction::UpdateCandidates(self.current_page_candidates()),
         ]
     }
 
@@ -244,34 +345,57 @@ impl PinyinEngine {
 
         let key: String = pinyin_segs.concat();
 
-        // Check if this exact word already exists with high weight (already in base dict)
+        // Only skip if it's a base dict word (not yet boosted by user)
+        // User words start at 1_000_000, base dict words are below that
         if let Some(entries) = self.table.get(&key) {
-            if entries.iter().any(|e| e.word == sentence && e.weight >= 1000) {
+            if entries.iter().any(|e| e.word == sentence && e.weight >= 1000 && e.weight < 1_000_000) {
                 return;
             }
         }
 
         let pinyin_spaced = pinyin_segs.join(" ");
-        let boost: u64 = 1_000_000;
+        let base_weight: u64 = 1_000_000;
 
         // Add/boost in memory
+        let new_weight;
         if let Some(entries) = self.table.get_mut(&key) {
             if let Some(entry) = entries.iter_mut().find(|e| e.word == sentence) {
-                entry.weight = entry.weight.saturating_add(boost);
+                entry.weight = entry.weight.saturating_add(1);
+                new_weight = entry.weight;
             } else {
-                entries.push(DictEntry { word: sentence.to_string(), weight: boost });
+                new_weight = base_weight;
+                entries.push(DictEntry { word: sentence.to_string(), weight: new_weight });
             }
             entries.sort_by(|a, b| b.weight.cmp(&a.weight));
         } else {
-            self.table.insert(key, vec![DictEntry { word: sentence.to_string(), weight: boost }]);
+            new_weight = base_weight;
+            self.table.insert(key, vec![DictEntry { word: sentence.to_string(), weight: new_weight }]);
         }
 
         // Write to user dict file
-        if let Some(path) = &self.userdb_path {
-            if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(file, "{}\t{}\tc={}", pinyin_spaced, sentence, boost);
-            }
+        self.save_userdb_entry(&pinyin_spaced, sentence, new_weight);
+    }
+
+    fn save_userdb_entry(&self, pinyin_spaced: &str, word: &str, weight: u64) {
+        let Some(path) = &self.userdb_path else { return };
+        let content = fs::read_to_string(path).unwrap_or_default();
+        let prefix = format!("{}\t{}\t", pinyin_spaced, word);
+        let mut found = false;
+        let mut lines: Vec<String> = content
+            .lines()
+            .map(|line| {
+                if line.starts_with(&prefix) {
+                    found = true;
+                    format!("{}c={}", prefix, weight)
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect();
+        if !found {
+            lines.push(format!("{}c={}", prefix, weight));
         }
+        let _ = fs::write(path, lines.join("\n") + "\n");
     }
 
     fn find_seg_count_for_word(&self, word: &str, remaining: &[String]) -> usize {
@@ -299,6 +423,7 @@ impl PinyinEngine {
         self.selected_words.clear();
         self.selected_seg_counts.clear();
         self.candidates.clear();
+        self.page = 0;
     }
 
     /// Segment pinyin string into syllables using greedy longest-match
@@ -445,7 +570,7 @@ impl Engine for PinyinEngine {
             let preedit_display = self.compose_preedit();
             return vec![
                 EngineAction::UpdatePreedit(preedit_display),
-                EngineAction::UpdateCandidates(self.candidates.clone()),
+                EngineAction::UpdateCandidates(self.current_page_candidates()),
             ];
         }
 
@@ -459,10 +584,27 @@ impl Engine for PinyinEngine {
             return vec![EngineAction::Commit(text)];
         }
 
-        // Space — select first candidate (may partially commit or fully commit)
+        // Page Down: = or Page_Down
+        if (keysym == 0x3d || keysym == 0xff56) && !self.candidates.is_empty() {
+            if self.page + 1 < self.total_pages() {
+                self.page += 1;
+            }
+            return vec![EngineAction::UpdateCandidates(self.current_page_candidates())];
+        }
+
+        // Page Up: - or Page_Up
+        if (keysym == 0x2d || keysym == 0xff55) && !self.candidates.is_empty() {
+            if self.page > 0 {
+                self.page -= 1;
+            }
+            return vec![EngineAction::UpdateCandidates(self.current_page_candidates())];
+        }
+
+        // Space — select first candidate on current page
         if keysym == 0x20 {
             if !self.candidates.is_empty() {
-                return self.select_candidate(0);
+                let abs_idx = self.page * PAGE_SIZE;
+                return self.select_candidate(abs_idx);
             }
             if self.preedit.is_empty() {
                 return vec![EngineAction::Forward];
@@ -470,14 +612,15 @@ impl Engine for PinyinEngine {
             return vec![EngineAction::Noop];
         }
 
-        // Digit 1-9 — select candidate by index
+        // Digit 1-9 — select candidate by index (within current page)
         if let Some(ch) = key.unicode
             && ('1'..='9').contains(&ch)
             && !self.candidates.is_empty()
         {
-            let idx = (ch as usize) - ('1' as usize);
-            if idx < self.candidates.len() {
-                return self.select_candidate(idx);
+            let page_idx = (ch as usize) - ('1' as usize);
+            let abs_idx = self.page * PAGE_SIZE + page_idx;
+            if abs_idx < self.candidates.len() {
+                return self.select_candidate(abs_idx);
             }
             return vec![EngineAction::Noop];
         }
@@ -492,7 +635,7 @@ impl Engine for PinyinEngine {
             let preedit_display = self.compose_preedit();
             return vec![
                 EngineAction::UpdatePreedit(preedit_display),
-                EngineAction::UpdateCandidates(self.candidates.clone()),
+                EngineAction::UpdateCandidates(self.current_page_candidates()),
             ];
         }
 

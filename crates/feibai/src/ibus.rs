@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use async_lock::Mutex;
 use zbus::object_server::SignalEmitter;
 use zbus::{connection, interface, zvariant};
 
@@ -80,11 +80,12 @@ impl FeibaiEngine {
         state: u32,
     ) -> zbus::fdo::Result<bool> {
         let is_release = (state & (1 << 30)) != 0;
-        if is_release {
+        let is_shift = keyval == 0xffe1 || keyval == 0xffe2;
+        if is_release && !is_shift {
             return Ok(false);
         }
 
-        let key_event = ibus_to_key_event(keyval, state);
+        let key_event = ibus_to_key_event(keyval, state, is_release);
         let mut engine = self.engine.lock().await;
         let actions = engine.process_key(&key_event);
 
@@ -277,7 +278,7 @@ fn get_ibus_address() -> Option<String> {
     None
 }
 
-fn ibus_to_key_event(keyval: u32, state: u32) -> KeyEvent {
+fn ibus_to_key_event(keyval: u32, state: u32, is_release: bool) -> KeyEvent {
     KeyEvent {
         keysym: keyval,
         unicode: char::from_u32(keyval).filter(|c| c.is_ascii_graphic() || *c == ' '),
@@ -287,7 +288,7 @@ fn ibus_to_key_event(keyval: u32, state: u32) -> KeyEvent {
             alt: (state & 8) != 0,
             super_: (state & 0x40) != 0,
         },
-        state: KeyState::Press,
+        state: if is_release { KeyState::Release } else { KeyState::Press },
     }
 }
 
@@ -323,6 +324,6 @@ pub async fn run_ibus(engine: PinyinEngine) -> Result<(), Box<dyn std::error::Er
 
     // Keep running
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        async_io::Timer::after(std::time::Duration::from_secs(3600)).await;
     }
 }

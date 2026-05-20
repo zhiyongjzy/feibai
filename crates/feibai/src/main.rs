@@ -520,8 +520,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --ibus flag forces IBus mode (launched by ibus-daemon)
     if args.iter().any(|a| a == "--ibus") {
         let engine = load_engine();
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(ibus::run_ibus(engine))?;
+        futures_lite::future::block_on(ibus::run_ibus(engine))?;
         return Ok(());
     }
 
@@ -532,8 +531,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !wayland_ok {
         eprintln!("[feibai] no Wayland display, trying IBus mode");
         let engine = load_engine();
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(ibus::run_ibus(engine))?;
+        futures_lite::future::block_on(ibus::run_ibus(engine))?;
         return Ok(());
     }
 
