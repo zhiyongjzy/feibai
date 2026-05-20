@@ -2,7 +2,7 @@
 <component>
     <name>org.freedesktop.IBus.Feibai</name>
     <description>Feibai Pinyin Input Method</description>
-    <exec>feibai --ibus</exec>
+    <exec>/usr/local/bin/feibai --ibus</exec>
     <version>0.1.0</version>
     <author>Jiang Zhiyong</author>
     <license>MIT</license>

@@ -23,11 +23,21 @@ fi
 IBUS_COMPONENT_DIR="/usr/share/ibus/component"
 if [ -d "$IBUS_COMPONENT_DIR" ]; then
     echo "[feibai] Installing IBus component (requires sudo)..."
-    sudo cp data/feibai.xml "$IBUS_COMPONENT_DIR/"
-    echo "  IBus: restart ibus-daemon and select 'Feibai Pinyin' in settings"
-elif [ -d "$HOME/.local/share/ibus/component" ]; then
+    FEIBAI_BIN="$(which feibai 2>/dev/null || echo "$INSTALL_BIN/feibai")"
+    sed "s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|" data/feibai.xml | sudo tee "$IBUS_COMPONENT_DIR/feibai.xml" > /dev/null
+    if command -v ibus &>/dev/null; then
+        ibus write-cache
+        ibus restart 2>/dev/null || true
+        echo "  IBus: restarted. Select 'Feibai Pinyin' in input sources"
+    fi
+elif [ -d "$HOME/.local/share/ibus/component" ] || [ -d "$HOME/.local/share/ibus" ]; then
     mkdir -p "$HOME/.local/share/ibus/component"
-    cp data/feibai.xml "$HOME/.local/share/ibus/component/"
+    FEIBAI_BIN="$(which feibai 2>/dev/null || echo "$INSTALL_BIN/feibai")"
+    sed "s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|" data/feibai.xml > "$HOME/.local/share/ibus/component/feibai.xml"
+    if command -v ibus &>/dev/null; then
+        ibus write-cache
+        ibus restart 2>/dev/null || true
+    fi
 else
     echo "  (IBus not found, skipping IBus registration)"
     echo "  For GNOME support, manually copy data/feibai.xml to /usr/share/ibus/component/"

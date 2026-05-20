@@ -22,5 +22,7 @@ libc = "0.2"
 dirs = "6"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
-zbus = { version = "5", default-features = false, features = ["tokio"] }
-tokio = { version = "1", features = ["rt", "macros"] }
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+async-io = "2"
+async-lock = "3"
+futures-lite = "2"
