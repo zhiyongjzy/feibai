@@ -500,8 +500,9 @@ impl PinyinEngine {
         }
         // Check if it's a prefix match (trailing incomplete syllable)
         let full_key: String = remaining.concat();
-        for (key, entries) in self.table.iter() {
-            if key.starts_with(&full_key) && entries.iter().any(|e| e.word == word) {
+        let upper = prefix_upper_bound(&full_key);
+        for (_key, entries) in self.table.range(full_key..upper) {
+            if entries.iter().any(|e| e.word == word) {
                 return remaining.len();
             }
         }
@@ -528,13 +529,73 @@ impl PinyinEngine {
     /// Incomplete trailing input (like "zh", "sh") is kept as a single segment.
     fn segment<'a>(&self, input: &'a str) -> Vec<&'a str> {
         let mut result = Vec::new();
-        let mut pos = 0;
-        let len = input.len();
+        let mut offset = 0;
 
+        for part in input.split('\'') {
+            if part.is_empty() {
+                continue;
+            }
+            let part_start = offset;
+            let segs = self.segment_dp(part);
+            for seg in segs {
+                let seg_start = part_start + (seg.as_ptr() as usize - part.as_ptr() as usize);
+                result.push(&input[seg_start..seg_start + seg.len()]);
+            }
+            offset = part_start + part.len() + 1; // +1 for the '\''
+        }
+        result
+    }
+
+    fn segment_dp<'a>(&self, input: &'a str) -> Vec<&'a str> {
+        let len = input.len();
+        if len == 0 {
+            return Vec::new();
+        }
+
+        // dp[i] = (chars_covered, segment_count, next_pos)
+        // Goal: maximize chars_covered; on tie, minimize segment_count (prefer longer syllables)
+        let mut dp: Vec<(usize, usize, usize)> = vec![(0, 0, 0); len + 1];
+        // dp[len] = (0, 0, 0) — base case
+
+        for i in (0..len).rev() {
+            let max_syl_len = (len - i).min(6);
+            let mut best: (usize, usize, usize) = (0, 0, i + 1); // (covered, segments, next)
+
+            for l in 1..=max_syl_len {
+                let slice = &input[i..i + l];
+                if self.syllables.contains(slice) {
+                    let (future_covered, future_segs, _) = dp[i + l];
+                    let covered = future_covered + l;
+                    let segs = future_segs + 1;
+                    // Prefer: more chars covered, then fewer segments
+                    if covered > best.0 || (covered == best.0 && segs < best.1) {
+                        best = (covered, segs, i + l);
+                    }
+                }
+            }
+
+            dp[i] = best;
+        }
+
+        // If DP covers the entire input, trace the optimal path
+        if dp[0].0 == len {
+            let mut result = Vec::new();
+            let mut pos = 0;
+            while pos < len {
+                let next = dp[pos].2;
+                result.push(&input[pos..next]);
+                pos = next;
+            }
+            return result;
+        }
+
+        // Fallback: greedy longest match with trailing incomplete segment
+        let mut result = Vec::new();
+        let mut pos = 0;
         while pos < len {
+            let max_syl_len = (len - pos).min(6);
             let mut best_end = 0;
-            let max_len = (len - pos).min(6);
-            for l in (1..=max_len).rev() {
+            for l in (1..=max_syl_len).rev() {
                 let slice = &input[pos..pos + l];
                 if self.syllables.contains(slice) {
                     best_end = l;
@@ -542,8 +603,6 @@ impl PinyinEngine {
                 }
             }
             if best_end == 0 {
-                // No valid syllable found — this is trailing incomplete input.
-                // Keep the entire remaining string as one segment.
                 result.push(&input[pos..]);
                 return result;
             }
@@ -1009,6 +1068,18 @@ mod tests {
         let engine = PinyinEngine::new_empty();
         let segs = engine.segment("jintiantianqizenmeyang");
         assert_eq!(segs, vec!["jin", "tian", "tian", "qi", "zen", "me", "yang"]);
+
+        // DP resolves die+rtiao ambiguity → di+er+tiao (rtiao is invalid)
+        let segs = engine.segment("diertiao");
+        assert_eq!(segs, vec!["di", "er", "tiao"]);
+
+        // Explicit separator forces die as a syllable
+        let segs = engine.segment("die'ertiao");
+        assert_eq!(segs, vec!["die", "er", "tiao"]);
+
+        // Separator disambiguates: xi'an'anquan → 西安安全
+        let segs = engine.segment("xi'an'anquan");
+        assert_eq!(segs, vec!["xi", "an", "an", "quan"]);
     }
 
     #[test]
