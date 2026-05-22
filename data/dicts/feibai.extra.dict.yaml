@@ -1,0 +1,509 @@
+# feibai extra dictionary
+# 补充日常高频词、互联网热词、口语常用词组
+# 来源：人工整理，MIT 协议
+---
+name: feibai.extra
+version: "2026-05-21"
+sort: by_weight
+columns:
+  - text
+  - pinyin
+  - weight
+...
+微信	wei xin	50000
+抖音	dou yin	45000
+小红书	xiao hong shu	40000
+朋友圈	peng you quan	35000
+支付宝	zhi fu bao	35000
+淘宝	tao bao	30000
+快手	kuai shou	25000
+哔哩哔哩	bi li bi li	20000
+百度	bai du	25000
+知乎	zhi hu	20000
+微博	wei bo	25000
+美团	mei tuan	20000
+京东	jing dong	20000
+拼多多	pin duo duo	18000
+外卖	wai mai	15000
+快递	kuai di	15000
+直播	zhi bo	15000
+短视频	duan shi pin	12000
+刷新	shua xin	10000
+点赞	dian zan	12000
+收藏	shou cang	12000
+转发	zhuan fa	12000
+评论	ping lun	12000
+关注	guan zhu	12000
+粉丝	fen si	10000
+热搜	re sou	10000
+网红	wang hong	10000
+带货	dai huo	8000
+种草	zhong cao	8000
+拉黑	la hei	8000
+群聊	qun liao	8000
+语音	yu yin	10000
+视频	shi pin	15000
+图片	tu pian	12000
+表情包	biao qing bao	10000
+红包	hong bao	12000
+二维码	er wei ma	10000
+扫码	sao ma	10000
+充值	chong zhi	8000
+账号	zhang hao	10000
+密码	mi ma	10000
+登录	deng lu	10000
+注册	zhu ce	8000
+验证码	yan zheng ma	8000
+手机号	shou ji hao	8000
+身份证	shen fen zheng	8000
+银行卡	yin hang ka	8000
+信用卡	xin yong ka	8000
+花呗	hua bei	8000
+借呗	jie bei	5000
+余额	yu e	8000
+转账	zhuan zhang	8000
+提现	ti xian	8000
+地铁	di tie	12000
+公交	gong jiao	10000
+打车	da che	10000
+滴滴	di di	10000
+导航	dao hang	10000
+高铁	gao tie	10000
+飞机	fei ji	10000
+酒店	jiu dian	10000
+民宿	min su	8000
+景点	jing dian	8000
+旅游	lv you	10000
+攻略	gong lve	10000
+美食	mei shi	10000
+奶茶	nai cha	10000
+咖啡	ka fei	10000
+火锅	huo guo	10000
+烧烤	shao kao	8000
+外卖	wai mai	12000
+堂食	tang shi	5000
+打包	da bao	8000
+核酸	he suan	5000
+疫苗	yi miao	8000
+口罩	kou zhao	8000
+健康码	jian kang ma	5000
+行程码	xing cheng ma	5000
+程序员	cheng xu yuan	10000
+代码	dai ma	12000
+编程	bian cheng	10000
+开源	kai yuan	8000
+框架	kuang jia	8000
+接口	jie kou	10000
+数据库	shu ju ku	8000
+服务器	fu wu qi	8000
+云服务	yun fu wu	6000
+部署	bu shu	8000
+上线	shang xian	8000
+版本	ban ben	8000
+更新	geng xin	10000
+升级	sheng ji	8000
+下载	xia zai	10000
+安装	an zhuang	10000
+卸载	xie zai	6000
+重启	chong qi	6000
+崩溃	beng kui	6000
+闪退	shan tui	5000
+卡顿	ka dun	5000
+流畅	liu chang	6000
+已读	yi du	5000
+未读	wei du	5000
+在线	zai xian	8000
+离线	li xian	6000
+网络	wang luo	10000
+连接	lian jie	8000
+断开	duan kai	5000
+信号	xin hao	8000
+流量	liu liang	8000
+充电	chong dian	8000
+电量	dian liang	6000
+截图	jie tu	8000
+录屏	lu ping	5000
+分享	fen xiang	10000
+保存	bao cun	8000
+复制	fu zhi	8000
+粘贴	zhan tie	8000
+剪切	jian qie	6000
+撤销	che xiao	6000
+确认	que ren	8000
+取消	qu xiao	8000
+提交	ti jiao	8000
+审核	shen he	6000
+通过	tong guo	10000
+拒绝	ju jue	6000
+同意	tong yi	8000
+协议	xie yi	6000
+隐私	yin si	6000
+权限	quan xian	8000
+设置	she zhi	10000
+消息	xiao xi	10000
+通知	tong zhi	8000
+提醒	ti xing	8000
+闹钟	nao zhong	6000
+日历	ri li	6000
+备忘录	bei wang lu	5000
+便签	bian qian	5000
+计算器	ji suan qi	5000
+浏览器	liu lan qi	8000
+输入法	shu ru fa	8000
+壁纸	bi zhi	5000
+铃声	ling sheng	5000
+飞行模式	fei xing mo shi	5000
+勿扰模式	wu rao mo shi	5000
+深色模式	shen se mo shi	5000
+然后	ran hou	20000
+但是	dan shi	20000
+因为	yin wei	20000
+所以	suo yi	20000
+虽然	sui ran	15000
+而且	er qie	15000
+如果	ru guo	18000
+那么	na me	15000
+不过	bu guo	15000
+其实	qi shi	15000
+可能	ke neng	18000
+应该	ying gai	15000
+已经	yi jing	18000
+正在	zheng zai	12000
+刚才	gang cai	10000
+马上	ma shang	12000
+立刻	li ke	8000
+一直	yi zhi	15000
+从来	cong lai	8000
+经常	jing chang	10000
+偶尔	ou er	6000
+有时候	you shi hou	8000
+大概	da gai	8000
+差不多	cha bu duo	10000
+特别	te bie	12000
+非常	fei chang	12000
+很多	hen duo	15000
+一些	yi xie	12000
+这些	zhe xie	12000
+那些	na xie	10000
+每个	mei ge	8000
+所有	suo you	12000
+大部分	da bu fen	8000
+大多数	da duo shu	6000
+怎么办	zen me ban	10000
+为什么	wei shen me	12000
+怎么样	zen me yang	10000
+是不是	shi bu shi	10000
+有没有	you mei you	10000
+好不好	hao bu hao	8000
+行不行	xing bu xing	6000
+能不能	neng bu neng	8000
+要不要	yao bu yao	8000
+可以吗	ke yi ma	6000
+好吧	hao ba	10000
+算了	suan le	8000
+随便	sui bian	8000
+无所谓	wu suo wei	6000
+没关系	mei guan xi	8000
+不好意思	bu hao yi si	8000
+对不起	dui bu qi	8000
+谢谢	xie xie	12000
+没问题	mei wen ti	8000
+知道了	zhi dao le	8000
+明白了	ming bai le	6000
+好的	hao de	12000
+可以	ke yi	15000
+不行	bu xing	8000
+不用	bu yong	10000
+不要	bu yao	10000
+别的	bie de	6000
+这样	zhe yang	12000
+那样	na yang	8000
+一样	yi yang	10000
+不一样	bu yi yang	6000
+觉得	jue de	15000
+认为	ren wei	10000
+希望	xi wang	10000
+打算	da suan	8000
+准备	zhun bei	10000
+开始	kai shi	12000
+结束	jie shu	10000
+继续	ji xu	10000
+完成	wan cheng	10000
+需要	xu yao	15000
+必须	bi xu	10000
+一定	yi ding	10000
+肯定	ken ding	8000
+确实	que shi	8000
+的确	di que	6000
+当然	dang ran	12000
+反正	fan zheng	8000
+到底	dao di	8000
+究竟	jiu jing	6000
+居然	ju ran	8000
+竟然	jing ran	6000
+忽然	hu ran	6000
+突然	tu ran	10000
+终于	zhong yu	10000
+总算	zong suan	5000
+幸好	xing hao	5000
+幸亏	xing kui	5000
+果然	guo ran	8000
+据说	ju shuo	6000
+听说	ting shuo	8000
+看来	kan lai	8000
+显然	xian ran	6000
+明显	ming xian	8000
+简单	jian dan	10000
+复杂	fu za	8000
+容易	rong yi	10000
+困难	kun nan	8000
+方便	fang bian	10000
+麻烦	ma fan	8000
+厉害	li hai	8000
+牛逼	niu bi	8000
+可以的	ke yi de	5000
+没事	mei shi	8000
+开心	kai xin	8000
+高兴	gao xing	8000
+难过	nan guo	6000
+生气	sheng qi	6000
+着急	zhao ji	6000
+担心	dan xin	8000
+放心	fang xin	8000
+加油	jia you	8000
+辛苦	xin ku	8000
+累了	lei le	5000
+饿了	e le	5000
+困了	kun le	5000
+回家	hui jia	10000
+上班	shang ban	10000
+下班	xia ban	8000
+加班	jia ban	8000
+请假	qing jia	6000
+出差	chu chai	6000
+开会	kai hui	8000
+汇报	hui bao	6000
+PPT	p p t	5000
+方案	fang an	8000
+项目	xiang mu	10000
+进度	jin du	6000
+排期	pai qi	5000
+对接	dui jie	6000
+沟通	gou tong	8000
+协作	xie zuo	5000
+反馈	fan kui	6000
+总结	zong jie	6000
+复盘	fu pan	5000
+迭代	die dai	5000
+优化	you hua	8000
+调整	tiao zheng	8000
+修改	xiu gai	8000
+删除	shan chu	8000
+添加	tian jia	8000
+移动	yi dong	6000
+拖拽	tuo zhuai	5000
+刷新	shua xin	6000
+搜索	sou suo	8000
+筛选	shai xuan	5000
+排序	pai xu	5000
+导入	dao ru	6000
+导出	dao chu	6000
+同步	tong bu	6000
+备份	bei fen	6000
+恢复	hui fu	6000
+清理	qing li	6000
+还行	hai xing	5000
+凑合	cou he	5000
+一般	yi ban	10000
+挺好	ting hao	6000
+不错	bu cuo	8000
+太好了	tai hao le	6000
+太棒了	tai bang le	5000
+没想到	mei xiang dao	6000
+想不到	xiang bu dao	5000
+来不及	lai bu ji	5000
+等一下	deng yi xia	6000
+稍等	shao deng	6000
+马上来	ma shang lai	5000
+回头	hui tou	6000
+抽空	chou kong	5000
+有空	you kong	6000
+没空	mei kong	5000
+忙不忙	mang bu mang	5000
+在吗	zai ma	6000
+在的	zai de	5000
+忙着	mang zhe	5000
+干嘛	gan ma	8000
+干啥	gan sha	6000
+咋了	za le	5000
+咋回事	za hui shi	5000
+怎么了	zen me le	8000
+出什么事了	chu shen me shi le	5000
+什么情况	shen me qing kuang	6000
+搞什么	gao shen me	5000
+服了	fu le	5000
+无语	wu yu	6000
+尴尬	gan ga	6000
+社死	she si	5000
+yyds	y y d s	5000
+绝了	jue le	5000
+离谱	li pu	6000
+逆天	ni tian	5000
+整活	zheng huo	5000
+摸鱼	mo yu	5000
+划水	hua shui	5000
+内卷	nei juan	6000
+躺平	tang ping	6000
+打工	da gong	6000
+打工人	da gong ren	5000
+干饭	gan fan	5000
+干饭人	gan fan ren	5000
+emo	e m o	5000
+破防	po fang	5000
+上头	shang tou	5000
+下头	xia tou	5000
+吐了	tu le	5000
+笑死	xiao si	5000
+哈哈哈	ha ha ha	8000
+好家伙	hao jia huo	5000
+我去	wo qu	5000
+卧槽	wo cao	6000
+牛啊	niu a	5000
+秀啊	xiu a	5000
+稳了	wen le	5000
+凉了	liang le	5000
+完了	wan le	6000
+芭比Q	ba bi q	3000
+大模型	da mo xing	15000
+人工智能	ren gong zhi neng	15000
+智能体	zhi neng ti	12000
+具身智能	ju shen zhi neng	8000
+深度学习	shen du xue xi	8000
+机器学习	ji qi xue xi	8000
+神经网络	shen jing wang luo	6000
+算法	suan fa	10000
+算力	suan li	10000
+训练	xun lian	8000
+推理	tui li	8000
+微调	wei tiao	6000
+开源	kai yuan	10000
+闭源	bi yuan	5000
+提示词	ti shi ci	6000
+幻觉	huan jue	5000
+多模态	duo mo tai	6000
+向量	xiang liang	5000
+嵌入	qian ru	5000
+知识库	zhi shi ku	5000
+工作流	gong zuo liu	6000
+自动化	zi dong hua	8000
+数字人	shu zi ren	6000
+虚拟人	xu ni ren	5000
+元宇宙	yuan yu zhou	6000
+区块链	qu kuai lian	5000
+数字孪生	shu zi luan sheng	5000
+低空经济	di kong jing ji	5000
+新能源	xin neng yuan	10000
+电动车	dian dong che	8000
+充电桩	chong dian zhuang	6000
+智能驾驶	zhi neng jia shi	6000
+自动驾驶	zi dong jia shi	8000
+无人机	wu ren ji	8000
+机器人	ji qi ren	10000
+人形机器人	ren xing ji qi ren	6000
+韧性	ren xing	8000
+情绪价值	qing xu jia zhi	8000
+显眼包	xian yan bao	6000
+搭子	da zi	6000
+数字游民	shu zi you min	5000
+村咖	cun ka	5000
+赛博	sai bo	5000
+谷子	gu zi	5000
+硬控	ying kong	5000
+活人感	huo ren gan	5000
+社畜	she chu	6000
+班味	ban wei	5000
+发疯文学	fa feng wen xue	5000
+电子榨菜	dian zi zha cai	5000
+信息茧房	xin xi jian fang	5000
+精神内耗	jing shen nei hao	6000
+松弛感	song chi gan	5000
+钝感力	dun gan li	5000
+边界感	bian jie gan	5000
+获得感	huo de gan	6000
+幸福感	xing fu gan	6000
+安全感	an quan gan	8000
+仪式感	yi shi gan	6000
+氛围感	fen wei gan	5000
+高级感	gao ji gan	5000
+沉浸式	chen jin shi	6000
+可视化	ke shi hua	6000
+数据驱动	shu ju qu dong	5000
+全链路	quan lian lu	5000
+赋能	fu neng	6000
+破圈	po quan	5000
+出圈	chu quan	6000
+爆款	bao kuan	6000
+种草	zhong cao	8000
+拔草	ba cao	5000
+安利	an li	6000
+测评	ce ping	6000
+开箱	kai xiang	6000
+博主	bo zhu	8000
+自媒体	zi mei ti	8000
+私域	si yu	5000
+公域	gong yu	5000
+流量池	liu liang chi	5000
+用户画像	yong hu hua xiang	5000
+千人千面	qian ren qian mian	5000
+转化率	zhuan hua lv	5000
+复购率	fu gou lv	5000
+客单价	ke dan jia	5000
+供应链	gong ying lian	8000
+中台	zhong tai	6000
+前端	qian duan	8000
+后端	hou duan	8000
+全栈	quan zhan	6000
+微服务	wei fu wu	6000
+容器化	rong qi hua	5000
+云原生	yun yuan sheng	5000
+持续集成	chi xu ji cheng	5000
+持续部署	chi xu bu shu	5000
+灰度发布	hui du fa bu	5000
+压测	ya ce	5000
+监控	jian kong	8000
+告警	gao jing	5000
+故障	gu zhang	6000
+降级	jiang ji	5000
+熔断	rong duan	5000
+限流	xian liu	5000
+高可用	gao ke yong	5000
+高并发	gao bing fa	5000
+分布式	fen bu shi	6000
+负载均衡	fu zai jun heng	5000
+缓存	huan cun	6000
+索引	suo yin	5000
+事务	shi wu	5000
+回滚	hui gun	5000
+版本控制	ban ben kong zhi	5000
+代码审查	dai ma shen cha	5000
+需求评审	xu qiu ping shen	5000
+技术方案	ji shu fang an	6000
+排期	pai qi	6000
+里程碑	li cheng bei	5000
+复盘	fu pan	6000
+对齐	dui qi	5000
+拉齐	la qi	5000
+抓手	zhua shou	5000
+闭环	bi huan	5000
+打通	da tong	6000
+落地	luo di	8000
+交付	jiao fu	6000
+上线	shang xian	8000
+下线	xia xian	5000
+迭代	die dai	8000
+敏捷	min jie	5000
+冲刺	chong ci	5000
+站会	zhan hui	5000
+评审	ping shen	6000
+联调	lian diao	5000
+灰度	hui du	5000

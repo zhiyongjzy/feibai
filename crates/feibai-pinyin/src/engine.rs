@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -7,12 +7,13 @@ use feibai_core::*;
 struct DictEntry {
     word: String,
     weight: u64,
+    user: bool,
 }
 
 const PAGE_SIZE: usize = 9;
 
 pub struct PinyinEngine {
-    table: HashMap<String, Vec<DictEntry>>,
+    table: BTreeMap<String, Vec<DictEntry>>,
     syllables: HashSet<&'static str>,
     preedit: String,
     segments: Vec<String>,
@@ -28,7 +29,7 @@ pub struct PinyinEngine {
 impl PinyinEngine {
     fn new_empty() -> Self {
         Self {
-            table: HashMap::new(),
+            table: BTreeMap::new(),
             syllables: PINYIN_SYLLABLES.iter().copied().collect(),
             preedit: String::new(),
             segments: Vec::new(),
@@ -118,6 +119,7 @@ impl PinyinEngine {
             self.table.entry(key).or_default().push(DictEntry {
                 word: word.to_string(),
                 weight,
+                user: false,
             });
         }
     }
@@ -155,11 +157,13 @@ impl PinyinEngine {
 
             let entries = self.table.entry(key).or_default();
             if let Some(existing) = entries.iter_mut().find(|e| e.word == word) {
-                existing.weight = existing.weight.saturating_add(weight);
+                existing.weight = weight;
+                existing.user = true;
             } else {
                 entries.push(DictEntry {
                     word: word.to_string(),
                     weight,
+                    user: true,
                 });
             }
         }
@@ -167,8 +171,13 @@ impl PinyinEngine {
 
     fn sort_entries(&mut self) {
         for entries in self.table.values_mut() {
-            entries.sort_by(|a, b| b.weight.cmp(&a.weight));
+            entries.sort_by(|a, b| Self::cmp_entry(b, a));
         }
+    }
+
+    fn cmp_entry(a: &DictEntry, b: &DictEntry) -> std::cmp::Ordering {
+        // User entries always rank above non-user entries
+        a.user.cmp(&b.user).then(a.weight.cmp(&b.weight))
     }
 
     fn update_segments(&mut self) {
@@ -192,20 +201,69 @@ impl PinyinEngine {
         self.candidates = Vec::new();
         self.page = 0;
 
-        // Viterbi DP: find best sentence covering all syllables
-        let sentence = self.viterbi_best_sentence(remaining);
+        // Check if the last segment is incomplete (not a valid syllable)
+        let last_seg = &remaining[n - 1];
+        let last_is_incomplete = !self.syllables.contains(last_seg.as_str());
 
-        // Collect word candidates for the first span (traditional behavior)
+        // Viterbi DP: only on complete syllables
+        let complete_segs = if last_is_incomplete { &remaining[..n - 1] } else { remaining };
+        let sentence = if complete_segs.len() > 1 {
+            self.viterbi_best_sentence(complete_segs)
+        } else {
+            None
+        };
+
         let mut seen = HashSet::new();
         if let Some(ref s) = sentence {
             seen.insert(s.clone());
             self.candidates.push(Candidate { text: s.clone(), comment: None });
         }
 
-        for end in (1..=n.min(8)).rev() {
+        // Exact match candidates for complete syllable spans
+        let exact_end = if last_is_incomplete { n - 1 } else { n };
+        for end in (1..=exact_end.min(8)).rev() {
             let key: String = remaining[..end].concat();
             if let Some(entries) = self.table.get(&key) {
                 for e in entries.iter() {
+                    if seen.insert(e.word.clone()) {
+                        self.candidates.push(Candidate {
+                            text: e.word.clone(),
+                            comment: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Prefix matching for trailing incomplete syllable (using BTreeMap range)
+        if last_is_incomplete {
+            let prefix: String = remaining.concat();
+            let prefix_end = prefix_upper_bound(&prefix);
+            let mut prefix_entries: Vec<&DictEntry> = self.table
+                .range(prefix.clone()..prefix_end)
+                .filter(|(k, _)| k.as_str() != prefix)
+                .flat_map(|(_, entries)| entries.iter())
+                .collect();
+            prefix_entries.sort_by(|a, b| b.weight.cmp(&a.weight));
+            for e in prefix_entries.iter().take(50) {
+                if seen.insert(e.word.clone()) {
+                    self.candidates.push(Candidate {
+                        text: e.word.clone(),
+                        comment: None,
+                    });
+                }
+            }
+
+            // Also try prefix on just the incomplete segment alone (single char candidates)
+            if n == 1 || self.candidates.is_empty() {
+                let seg_end = prefix_upper_bound(last_seg);
+                let mut single_prefix_entries: Vec<&DictEntry> = self.table
+                    .range(last_seg.clone()..seg_end)
+                    .filter(|(k, _)| k.len() <= 6)
+                    .flat_map(|(_, entries)| entries.iter())
+                    .collect();
+                single_prefix_entries.sort_by(|a, b| b.weight.cmp(&a.weight));
+                for e in single_prefix_entries.iter().take(50) {
                     if seen.insert(e.word.clone()) {
                         self.candidates.push(Candidate {
                             text: e.word.clone(),
@@ -336,17 +394,49 @@ impl PinyinEngine {
         ]
     }
 
-    /// Learn from a commit: only record if the combination is new (not in base dict)
     fn learn_from_commit(&mut self, sentence: &str, pinyin_segs: &[String]) {
-        // Single char commits: skip (base dict covers them)
-        if sentence.chars().count() <= 1 {
+        let key: String = pinyin_segs.concat();
+        let is_single_char = sentence.chars().count() <= 1;
+
+        // For single chars: 2-selection promotion strategy
+        // 1st select: jump to just below current top (top - 1)
+        // 2nd select: overtake the top
+        if is_single_char {
+            let mut changed = false;
+            let mut persist_weight = 0u64;
+            if let Some(entries) = self.table.get_mut(&key) {
+                let top_other = entries.iter()
+                    .filter(|e| e.user && e.word != sentence)
+                    .map(|e| e.weight)
+                    .max();
+                if let Some(entry) = entries.iter_mut().find(|e| e.word == sentence) {
+                    let old_weight = entry.weight;
+                    match top_other {
+                        Some(top) if entry.weight < top => {
+                            if entry.weight < top.saturating_sub(1) {
+                                entry.weight = top.saturating_sub(1);
+                            } else {
+                                entry.weight = top.saturating_add(1);
+                            }
+                        }
+                        _ => {
+                            entry.weight = entry.weight.saturating_add(1);
+                        }
+                    }
+                    changed = entry.weight != old_weight || !entry.user;
+                    entry.user = true;
+                    persist_weight = entry.weight;
+                    entries.sort_by(|a, b| Self::cmp_entry(b, a));
+                }
+            }
+            if changed {
+                let pinyin_spaced = pinyin_segs.join(" ");
+                self.save_userdb_entry(&pinyin_spaced, sentence, persist_weight);
+            }
             return;
         }
 
-        let key: String = pinyin_segs.concat();
-
-        // Only skip if it's a base dict word (not yet boosted by user)
-        // User words start at 1_000_000, base dict words are below that
+        // Multi-char: skip if it's a base dict word (weight 1000~999999)
         if let Some(entries) = self.table.get(&key) {
             if entries.iter().any(|e| e.word == sentence && e.weight >= 1000 && e.weight < 1_000_000) {
                 return;
@@ -361,15 +451,16 @@ impl PinyinEngine {
         if let Some(entries) = self.table.get_mut(&key) {
             if let Some(entry) = entries.iter_mut().find(|e| e.word == sentence) {
                 entry.weight = entry.weight.saturating_add(1);
+                entry.user = true;
                 new_weight = entry.weight;
             } else {
                 new_weight = base_weight;
-                entries.push(DictEntry { word: sentence.to_string(), weight: new_weight });
+                entries.push(DictEntry { word: sentence.to_string(), weight: new_weight, user: true });
             }
-            entries.sort_by(|a, b| b.weight.cmp(&a.weight));
+            entries.sort_by(|a, b| Self::cmp_entry(b, a));
         } else {
             new_weight = base_weight;
-            self.table.insert(key, vec![DictEntry { word: sentence.to_string(), weight: new_weight }]);
+            self.table.insert(key, vec![DictEntry { word: sentence.to_string(), weight: new_weight, user: true }]);
         }
 
         // Write to user dict file
@@ -407,6 +498,13 @@ impl PinyinEngine {
                 }
             }
         }
+        // Check if it's a prefix match (trailing incomplete syllable)
+        let full_key: String = remaining.concat();
+        for (key, entries) in self.table.iter() {
+            if key.starts_with(&full_key) && entries.iter().any(|e| e.word == word) {
+                return remaining.len();
+            }
+        }
         // Fallback: the Viterbi full-sentence candidate covers all remaining
         remaining.len()
     }
@@ -426,7 +524,8 @@ impl PinyinEngine {
         self.page = 0;
     }
 
-    /// Segment pinyin string into syllables using greedy longest-match
+    /// Segment pinyin string into syllables using greedy longest-match.
+    /// Incomplete trailing input (like "zh", "sh") is kept as a single segment.
     fn segment<'a>(&self, input: &'a str) -> Vec<&'a str> {
         let mut result = Vec::new();
         let mut pos = 0;
@@ -443,7 +542,10 @@ impl PinyinEngine {
                 }
             }
             if best_end == 0 {
-                best_end = 1;
+                // No valid syllable found — this is trailing incomplete input.
+                // Keep the entire remaining string as one segment.
+                result.push(&input[pos..]);
+                return result;
             }
             result.push(&input[pos..pos + best_end]);
             pos += best_end;
@@ -454,6 +556,19 @@ impl PinyinEngine {
     pub fn is_chinese_mode(&self) -> bool {
         self.chinese_mode
     }
+}
+
+fn prefix_upper_bound(prefix: &str) -> String {
+    let mut bytes = prefix.as_bytes().to_vec();
+    // Increment the last byte to get the exclusive upper bound for range query
+    while let Some(last) = bytes.last_mut() {
+        if *last < 0xFF {
+            *last += 1;
+            return String::from_utf8(bytes).unwrap_or_else(|_| format!("{}~", prefix));
+        }
+        bytes.pop();
+    }
+    format!("{}~", prefix)
 }
 
 const PINYIN_SYLLABLES: &[&str] = &[
@@ -655,6 +770,9 @@ impl Engine for PinyinEngine {
 mod tests {
     use super::*;
 
+    const TEST_BASE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/dicts/feibai.base.dict.yaml");
+    const TEST_EXTRA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/dicts/feibai.extra.dict.yaml");
+
     fn press_key(engine: &mut PinyinEngine, c: char) -> Vec<EngineAction> {
         let key = KeyEvent {
             keysym: c as u32,
@@ -666,7 +784,7 @@ mod tests {
     }
 
     fn make_engine() -> PinyinEngine {
-        PinyinEngine::from_file("/home/zhiyjia/Downloads/rime-ice/cn_dicts/8105.dict.yaml").unwrap()
+        PinyinEngine::from_file(TEST_BASE).unwrap()
     }
 
     #[test]
@@ -708,7 +826,7 @@ mod tests {
             state: KeyState::Press,
         };
         let actions = engine.process_key(&key);
-        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "尼")));
+        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "泥")));
     }
 
     #[test]
@@ -846,8 +964,8 @@ mod tests {
     #[test]
     fn test_multi_dict_loading() {
         let engine = PinyinEngine::from_files(&[
-            "/home/zhiyjia/Downloads/rime-ice/cn_dicts/8105.dict.yaml",
-            "/home/zhiyjia/Downloads/rime-ice/cn_dicts/base.dict.yaml",
+            TEST_BASE,
+            TEST_EXTRA,
         ])
         .unwrap();
         assert!(engine.is_chinese_mode());
@@ -856,8 +974,8 @@ mod tests {
     #[test]
     fn test_word_lookup() {
         let mut engine = PinyinEngine::from_files(&[
-            "/home/zhiyjia/Downloads/rime-ice/cn_dicts/8105.dict.yaml",
-            "/home/zhiyjia/Downloads/rime-ice/cn_dicts/base.dict.yaml",
+            TEST_BASE,
+            TEST_EXTRA,
         ])
         .unwrap();
         press_key(&mut engine, 'n');
@@ -874,8 +992,8 @@ mod tests {
     #[test]
     fn test_long_pinyin_segmentation() {
         let mut engine = PinyinEngine::from_files(&[
-            "/home/zhiyjia/Downloads/rime-ice/cn_dicts/8105.dict.yaml",
-            "/home/zhiyjia/Downloads/rime-ice/cn_dicts/base.dict.yaml",
+            TEST_BASE,
+            TEST_EXTRA,
         ])
         .unwrap();
         // Type "jintian" — should match "今天"
@@ -896,8 +1014,8 @@ mod tests {
     #[test]
     fn test_progressive_selection_flow() {
         let mut engine = PinyinEngine::from_files(&[
-            "/home/zhiyjia/Downloads/rime-ice/cn_dicts/8105.dict.yaml",
-            "/home/zhiyjia/Downloads/rime-ice/cn_dicts/base.dict.yaml",
+            TEST_BASE,
+            TEST_EXTRA,
         ])
         .unwrap();
 
@@ -927,8 +1045,8 @@ mod tests {
     #[test]
     fn test_progressive_word_selection() {
         let mut engine = PinyinEngine::from_files(&[
-            "/home/zhiyjia/Downloads/rime-ice/cn_dicts/8105.dict.yaml",
-            "/home/zhiyjia/Downloads/rime-ice/cn_dicts/base.dict.yaml",
+            TEST_BASE,
+            TEST_EXTRA,
         ])
         .unwrap();
 

@@ -1,0 +1,326 @@
+# feibai tech dictionary
+# ADAS/自动驾驶、机器人、AI、软件开发 专业术语
+# 来源：公开技术术语整理，MIT 协议
+---
+name: feibai.tech
+version: "2026-05-21"
+sort: by_weight
+columns:
+  - text
+  - pinyin
+  - weight
+...
+自动驾驶	zi dong jia shi	15000
+智能驾驶	zhi neng jia shi	12000
+辅助驾驶	fu zhu jia shi	10000
+高级驾驶辅助系统	gao ji jia shi fu zhu xi tong	6000
+自适应巡航	zi shi ying xun hang	8000
+车道保持	che dao bao chi	8000
+车道偏离	che dao pian li	6000
+自动紧急制动	zi dong jin ji zhi dong	6000
+紧急制动	jin ji zhi dong	8000
+盲区监测	mang qu jian ce	6000
+泊车辅助	bo che fu zhu	6000
+自动泊车	zi dong bo che	8000
+环视系统	huan shi xi tong	5000
+全景影像	quan jing ying xiang	6000
+交通标志识别	jiao tong biao zhi shi bie	5000
+行人检测	xing ren jian ce	6000
+目标检测	mu biao jian ce	8000
+目标跟踪	mu biao gen zong	6000
+语义分割	yu yi fen ge	6000
+实例分割	shi li fen ge	5000
+点云	dian yun	6000
+激光雷达	ji guang lei da	10000
+毫米波雷达	hao mi bo lei da	8000
+超声波雷达	chao sheng bo lei da	5000
+摄像头	she xiang tou	8000
+传感器融合	chuan gan qi rong he	8000
+传感器	chuan gan qi	10000
+控制器	kong zhi qi	8000
+执行器	zhi xing qi	6000
+域控制器	yu kong zhi qi	8000
+中央计算	zhong yang ji suan	5000
+电子电气架构	dian zi dian qi jia gou	5000
+线控底盘	xian kong di pan	5000
+线控转向	xian kong zhuan xiang	5000
+线控制动	xian kong zhi dong	5000
+功能安全	gong neng an quan	8000
+预期功能安全	yu qi gong neng an quan	5000
+信息安全	xin xi an quan	6000
+安全等级	an quan deng ji	5000
+冗余设计	rong yu she ji	5000
+硬件在环	ying jian zai huan	6000
+软件在环	ruan jian zai huan	6000
+模型在环	mo xing zai huan	5000
+仿真测试	fang zhen ce shi	8000
+仿真	fang zhen	8000
+场景库	chang jing ku	5000
+测试用例	ce shi yong li	6000
+回归测试	hui gui ce shi	5000
+路径规划	lu jing gui hua	8000
+轨迹规划	gui ji gui hua	6000
+运动规划	yun dong gui hua	5000
+决策规划	jue ce gui hua	5000
+感知	gan zhi	10000
+规划	gui hua	8000
+控制	kong zhi	10000
+定位	ding wei	8000
+建图	jian tu	5000
+高精地图	gao jing di tu	6000
+车联网	che lian wang	8000
+车路协同	che lu xie tong	5000
+路侧设备	lu ce she bei	5000
+空中下载	kong zhong xia zai	5000
+整车控制器	zheng che kong zhi qi	5000
+电池管理系统	dian chi guan li xi tong	5000
+电机控制器	dian ji kong zhi qi	5000
+标定	biao ding	6000
+标注	biao zhu	8000
+数据采集	shu ju cai ji	6000
+数据闭环	shu ju bi huan	6000
+影子模式	ying zi mo shi	5000
+量产	liang chan	8000
+前装	qian zhuang	5000
+后装	hou zhuang	5000
+车规级	che gui ji	6000
+芯片	xin pian	10000
+算力芯片	suan li xin pian	5000
+嵌入式	qian ru shi	8000
+实时操作系统	shi shi cao zuo xi tong	5000
+中间件	zhong jian jian	6000
+通信协议	tong xin xie yi	5000
+总线	zong xian	6000
+以太网	yi tai wang	5000
+机器人	ji qi ren	12000
+人形机器人	ren xing ji qi ren	8000
+协作机器人	xie zuo ji qi ren	5000
+移动机器人	yi dong ji qi ren	5000
+机械臂	ji xie bi	8000
+关节	guan jie	5000
+自由度	zi you du	5000
+末端执行器	mo duan zhi xing qi	5000
+正运动学	zheng yun dong xue	5000
+逆运动学	ni yun dong xue	5000
+路径规划	lu jing gui hua	8000
+避障	bi zhang	6000
+建图	jian tu	5000
+导航	dao hang	8000
+定位	ding wei	8000
+里程计	li cheng ji	5000
+惯性测量单元	guan xing ce liang dan yuan	5000
+陀螺仪	tuo luo yi	5000
+加速度计	jia su du ji	5000
+伺服电机	si fu dian ji	5000
+步进电机	bu jin dian ji	5000
+减速器	jian su qi	5000
+谐波减速器	xie bo jian su qi	5000
+编码器	bian ma qi	5000
+力矩传感器	li ju chuan gan qi	5000
+抓取	zhua qu	5000
+操作	cao zuo	6000
+仿真环境	fang zhen huan jing	5000
+数字孪生	shu zi luan sheng	6000
+强化学习	qiang hua xue xi	6000
+模仿学习	mo fang xue xi	5000
+端到端	duan dao duan	6000
+世界模型	shi jie mo xing	5000
+视觉语言模型	shi jue yu yan mo xing	5000
+多模态模型	duo mo tai mo xing	5000
+基础模型	ji chu mo xing	5000
+预训练	yu xun lian	6000
+微调	wei tiao	6000
+量化	liang hua	5000
+蒸馏	zheng liu	5000
+推理加速	tui li jia su	5000
+模型压缩	mo xing ya suo	5000
+边缘计算	bian yuan ji suan	6000
+云端	yun duan	6000
+端侧	duan ce	5000
+卷积神经网络	juan ji shen jing wang luo	5000
+变换器	bian huan qi	5000
+注意力机制	zhu yi li ji zhi	5000
+残差网络	can cha wang luo	5000
+损失函数	sun shi han shu	5000
+梯度下降	ti du xia jiang	5000
+反向传播	fan xiang chuan bo	5000
+过拟合	guo ni he	5000
+欠拟合	qian ni he	5000
+数据增强	shu ju zeng qiang	5000
+批量归一化	pi liang gui yi hua	5000
+学习率	xue xi lv	5000
+超参数	chao can shu	5000
+特征提取	te zheng ti qu	5000
+特征图	te zheng tu	5000
+锚框	mao kuang	5000
+非极大值抑制	fei ji da zhi yi zhi	5000
+交并比	jiao bing bi	5000
+召回率	zhao hui lv	5000
+精确率	jing que lv	5000
+准确率	zhun que lv	5000
+代码仓库	dai ma cang ku	6000
+分支	fen zhi	8000
+合并	he bing	8000
+提交	ti jiao	8000
+拉取请求	la qu qing qiu	5000
+合并请求	he bing qing qiu	5000
+代码审查	dai ma shen cha	6000
+重构	chong gou	6000
+单元测试	dan yuan ce shi	6000
+集成测试	ji cheng ce shi	5000
+端到端测试	duan dao duan ce shi	5000
+覆盖率	fu gai lv	5000
+断言	duan yan	5000
+依赖	yi lai	6000
+依赖注入	yi lai zhu ru	5000
+设计模式	she ji mo shi	6000
+单例模式	dan li mo shi	5000
+工厂模式	gong chang mo shi	5000
+观察者模式	guan cha zhe mo shi	5000
+策略模式	ce lve mo shi	5000
+接口	jie kou	8000
+抽象类	chou xiang lei	5000
+继承	ji cheng	5000
+多态	duo tai	5000
+封装	feng zhuang	5000
+泛型	fan xing	5000
+枚举	mei ju	5000
+闭包	bi bao	5000
+协程	xie cheng	5000
+异步	yi bu	6000
+同步	tong bu	6000
+并发	bing fa	6000
+线程	xian cheng	6000
+进程	jin cheng	6000
+互斥锁	hu chi suo	5000
+读写锁	du xie suo	5000
+死锁	si suo	5000
+竞态条件	jing tai tiao jian	5000
+原子操作	yuan zi cao zuo	5000
+消息队列	xiao xi dui lie	5000
+发布订阅	fa bu ding yue	5000
+事件驱动	shi jian qu dong	5000
+回调函数	hui diao han shu	5000
+序列化	xu lie hua	5000
+反序列化	fan xu lie hua	5000
+日志	ri zhi	8000
+断点	duan dian	5000
+调试	tiao shi	8000
+性能优化	xing neng you hua	6000
+内存泄漏	nei cun xie lou	5000
+堆栈溢出	dui zhan yi chu	5000
+空指针	kong zhi zhen	5000
+段错误	duan cuo wu	5000
+编译	bian yi	8000
+链接	lian jie	6000
+运行时	yun xing shi	5000
+静态分析	jing tai fen xi	5000
+动态分析	dong tai fen xi	5000
+代码生成	dai ma sheng cheng	5000
+脚手架	jiao shou jia	5000
+模板	mu ban	6000
+配置文件	pei zhi wen jian	5000
+环境变量	huan jing bian liang	5000
+包管理器	bao guan li qi	5000
+构建工具	gou jian gong ju	5000
+构建系统	gou jian xi tong	5000
+交叉编译	jiao cha bian yi	5000
+工具链	gong ju lian	6000
+软件架构	ruan jian jia gou	8000
+微服务	wei fu wu	8000
+单体架构	dan ti jia gou	5000
+分层架构	fen ceng jia gou	5000
+事件溯源	shi jian su yuan	5000
+领域驱动	ling yu qu dong	5000
+服务网格	fu wu wang ge	5000
+容器	rong qi	6000
+容器编排	rong qi bian pai	5000
+镜像	jing xiang	5000
+虚拟化	xu ni hua	5000
+持续集成	chi xu ji cheng	6000
+持续部署	chi xu bu shu	6000
+持续交付	chi xu jiao fu	5000
+流水线	liu shui xian	6000
+制品库	zhi pin ku	5000
+灰度发布	hui du fa bu	5000
+蓝绿部署	lan lv bu shu	5000
+金丝雀发布	jin si que fa bu	5000
+滚动更新	gun dong geng xin	5000
+回滚	hui gun	6000
+版本号	ban ben hao	5000
+语义化版本	yu yi hua ban ben	5000
+技术债务	ji shu zhai wu	5000
+代码质量	dai ma zhi liang	5000
+代码规范	dai ma gui fan	5000
+架构评审	jia gou ping shen	5000
+技术选型	ji shu xuan xing	5000
+性能测试	xing neng ce shi	5000
+压力测试	ya li ce shi	5000
+负载测试	fu zai ce shi	5000
+基准测试	ji zhun ce shi	5000
+冒烟测试	mao yan ce shi	5000
+可观测性	ke guan ce xing	5000
+链路追踪	lian lu zhui zong	5000
+指标监控	zhi biao jian kong	5000
+告警规则	gao jing gui ze	5000
+故障排查	gu zhang pai cha	5000
+根因分析	gen yin fen xi	5000
+服务降级	fu wu jiang ji	5000
+熔断器	rong duan qi	5000
+限流器	xian liu qi	5000
+重试机制	chong shi ji zhi	5000
+超时机制	chao shi ji zhi	5000
+幂等性	mi deng xing	5000
+最终一致性	zui zhong yi zhi xing	5000
+分布式锁	fen bu shi suo	5000
+分布式事务	fen bu shi shi wu	5000
+数据库	shu ju ku	8000
+关系型数据库	guan xi xing shu ju ku	5000
+时序数据库	shi xu shu ju ku	5000
+向量数据库	xiang liang shu ju ku	5000
+图数据库	tu shu ju ku	5000
+缓存	huan cun	6000
+索引	suo yin	6000
+分片	fen pian	5000
+副本	fu ben	5000
+主从	zhu cong	5000
+读写分离	du xie fen li	5000
+连接池	lian jie chi	5000
+线程池	xian cheng chi	5000
+对象池	dui xiang chi	5000
+内存池	nei cun chi	5000
+垃圾回收	la ji hui shou	5000
+引用计数	yin yong ji shu	5000
+智能指针	zhi neng zhi zhen	5000
+所有权	suo you quan	5000
+生命周期	sheng ming zhou qi	6000
+借用检查	jie yong jian cha	5000
+类型推断	lei xing tui duan	5000
+模式匹配	mo shi pi pei	5000
+宏	hong	5000
+特征	te zheng	5000
+接口协议	jie kou xie yi	5000
+需求文档	xu qiu wen dang	5000
+设计文档	she ji wen dang	5000
+接口文档	jie kou wen dang	5000
+技术方案	ji shu fang an	6000
+概要设计	gai yao she ji	5000
+详细设计	xiang xi she ji	5000
+评审	ping shen	6000
+排期	pai qi	6000
+里程碑	li cheng bei	5000
+迭代	die dai	8000
+冲刺	chong ci	5000
+看板	kan ban	5000
+需求池	xu qiu chi	5000
+优先级	you xian ji	6000
+阻塞	zu se	5000
+联调	lian diao	6000
+联调环境	lian diao huan jing	5000
+预发布	yu fa bu	5000
+线上	xian shang	6000
+线下	xian xia	5000
+生产环境	sheng chan huan jing	5000
+测试环境	ce shi huan jing	5000
+开发环境	kai fa huan jing	5000
+沙箱	sha xiang	5000

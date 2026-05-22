@@ -11,13 +11,16 @@ echo "[feibai] Installing binary to $INSTALL_BIN/"
 mkdir -p "$INSTALL_BIN"
 cp target/release/feibai "$INSTALL_BIN/"
 
-echo "[feibai] Installing dict to $FEIBAI_DIR/"
+echo "[feibai] Installing dicts to $FEIBAI_DIR/"
 mkdir -p "$FEIBAI_DIR"
-if [ ! -f "$FEIBAI_DIR/feibai.base.dict.yaml" ]; then
-    cp data/dicts/feibai.base.dict.yaml "$FEIBAI_DIR/"
-else
-    echo "  (base dict already exists, skipping)"
-fi
+for dict in data/dicts/*.dict.yaml; do
+    name="$(basename "$dict")"
+    if [ ! -f "$FEIBAI_DIR/$name" ]; then
+        cp "$dict" "$FEIBAI_DIR/"
+    else
+        echo "  ($name already exists, skipping)"
+    fi
+done
 
 # Install IBus component XML (for GNOME/KDE support)
 IBUS_COMPONENT_DIR="/usr/share/ibus/component"
