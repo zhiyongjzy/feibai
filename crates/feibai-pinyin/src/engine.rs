@@ -14,6 +14,7 @@ const PAGE_SIZE: usize = 9;
 
 pub struct PinyinEngine {
     table: BTreeMap<String, Vec<DictEntry>>,
+    en_dict: BTreeMap<String, u64>,
     syllables: HashSet<&'static str>,
     preedit: String,
     segments: Vec<String>,
@@ -30,6 +31,7 @@ impl PinyinEngine {
     fn new_empty() -> Self {
         Self {
             table: BTreeMap::new(),
+            en_dict: BTreeMap::new(),
             syllables: PINYIN_SYLLABLES.iter().copied().collect(),
             preedit: String::new(),
             segments: Vec::new(),
@@ -61,6 +63,30 @@ impl PinyinEngine {
 
     pub fn set_userdb_path(&mut self, path: impl Into<PathBuf>) {
         self.userdb_path = Some(path.into());
+    }
+
+    pub fn load_en_dict(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
+        let content = fs::read_to_string(path.as_ref())
+            .map_err(|e| format!("failed to read en dict {}: {e}", path.as_ref().display()))?;
+        let mut past_header = false;
+        let mut in_header = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if !past_header {
+                if trimmed == "---" { in_header = true; continue; }
+                if trimmed == "..." { in_header = false; past_header = true; continue; }
+                if in_header { continue; }
+                continue;
+            }
+            if trimmed.is_empty() || trimmed.starts_with('#') { continue; }
+            let mut parts = trimmed.splitn(2, '\t');
+            let word = parts.next().unwrap_or("").to_lowercase();
+            let weight: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+            if word.len() >= 3 {
+                self.en_dict.entry(word).or_insert(weight);
+            }
+        }
+        Ok(())
     }
 
     fn load_dict(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
@@ -205,6 +231,15 @@ impl PinyinEngine {
         let last_seg = &remaining[n - 1];
         let last_is_incomplete = !self.syllables.contains(last_seg.as_str());
 
+        // If any segment is not a valid syllable, offer raw input as first candidate
+        let has_invalid_seg = remaining.iter().any(|s| !self.syllables.contains(s.as_str()));
+        if has_invalid_seg {
+            let raw: String = remaining.concat();
+            if !raw.is_empty() {
+                self.candidates.push(Candidate { text: raw, comment: None });
+            }
+        }
+
         // Viterbi DP: only on complete syllables
         let complete_segs = if last_is_incomplete { &remaining[..n - 1] } else { remaining };
         let sentence = if complete_segs.len() > 1 {
@@ -269,6 +304,35 @@ impl PinyinEngine {
                             text: e.word.clone(),
                             comment: None,
                         });
+                    }
+                }
+            }
+        }
+
+        // English dictionary prefix matching
+        if !self.en_dict.is_empty() {
+            let raw: String = remaining.concat();
+            if raw.len() >= 2 {
+                let en_upper = prefix_upper_bound(&raw);
+                let mut en_candidates: Vec<(&String, &u64)> = self.en_dict
+                    .range(raw.clone()..en_upper)
+                    .collect();
+                en_candidates.sort_by(|a, b| b.1.cmp(a.1));
+                let insert_pos = if has_invalid_seg {
+                    // Invalid pinyin: English candidates right after raw text (position 1)
+                    1.min(self.candidates.len())
+                } else {
+                    // Valid pinyin: English candidates at the end
+                    self.candidates.len()
+                };
+                let mut inserted = 0;
+                for (word, _) in en_candidates.iter().take(5) {
+                    if seen.insert((*word).clone()) {
+                        self.candidates.insert(insert_pos + inserted, Candidate {
+                            text: (*word).clone(),
+                            comment: Some("en".to_string()),
+                        });
+                        inserted += 1;
                     }
                 }
             }

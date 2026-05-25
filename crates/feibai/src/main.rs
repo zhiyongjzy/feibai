@@ -454,27 +454,31 @@ fn load_engine() -> PinyinEngine {
     eprintln!("[feibai] dir: {}", feibai_dir.display());
 
     // Scan for all *.dict.yaml in feibai dir and fallback locations
-    let mut found_paths: Vec<String> = Vec::new();
+    // Convention: *.en.dict.yaml → English dict, others → Chinese pinyin dict
+    let mut cn_paths: Vec<String> = Vec::new();
+    let mut en_paths: Vec<String> = Vec::new();
 
     let base_in_dir = feibai_dir.join("feibai.base.dict.yaml");
     if base_in_dir.exists() {
-        found_paths.push(base_in_dir.to_string_lossy().to_string());
+        cn_paths.push(base_in_dir.to_string_lossy().to_string());
     }
     if let Ok(entries) = std::fs::read_dir(&feibai_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.ends_with(".dict.yaml") && name != "feibai.base.dict.yaml" {
-                    let p = path.to_string_lossy().to_string();
-                    if !found_paths.contains(&p) {
-                        found_paths.push(p);
-                    }
+                if !name.ends_with(".dict.yaml") { continue; }
+                if name == "feibai.base.dict.yaml" { continue; }
+                let p = path.to_string_lossy().to_string();
+                if name.contains(".en.") {
+                    en_paths.push(p);
+                } else if !cn_paths.contains(&p) {
+                    cn_paths.push(p);
                 }
             }
         }
     }
 
-    if found_paths.is_empty() {
+    if cn_paths.is_empty() {
         let fallback_dirs = [
             "data/dicts",
             "/usr/share/feibai/dicts",
@@ -483,24 +487,31 @@ fn load_engine() -> PinyinEngine {
         for dir in &fallback_dirs {
             let p = format!("{}/feibai.base.dict.yaml", dir);
             if std::path::Path::new(&p).exists() {
-                found_paths.push(p);
+                cn_paths.push(p);
                 break;
             }
         }
     }
 
-    if found_paths.is_empty() {
+    if cn_paths.is_empty() {
         eprintln!("[feibai] ERROR: cannot find any dict files in {}", feibai_dir.display());
         eprintln!("[feibai] place feibai.base.dict.yaml in ~/.config/feibai/");
         std::process::exit(1);
     }
-    for p in &found_paths {
+    for p in &cn_paths {
         eprintln!("[feibai] loading dict: {}", p);
     }
     let mut engine = PinyinEngine::from_files(
-        &found_paths.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        &cn_paths.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
     )
     .expect("failed to load dicts");
+
+    for p in &en_paths {
+        eprintln!("[feibai] loading en dict: {}", p);
+        if let Err(e) = engine.load_en_dict(p) {
+            eprintln!("[feibai] WARNING: {}", e);
+        }
+    }
 
     let user_dict_path = feibai_dir.join("user.dict.txt");
     engine.set_userdb_path(&user_dict_path);
