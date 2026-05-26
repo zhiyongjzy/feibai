@@ -233,11 +233,9 @@ impl PinyinEngine {
 
         // If any segment is not a valid syllable, offer raw input as first candidate
         let has_invalid_seg = remaining.iter().any(|s| !self.syllables.contains(s.as_str()));
-        if has_invalid_seg {
-            let raw: String = remaining.concat();
-            if !raw.is_empty() {
-                self.candidates.push(Candidate { text: raw, comment: None });
-            }
+        let raw_input: String = remaining.concat();
+        if has_invalid_seg && raw_input.len() >= 3 {
+            self.candidates.push(Candidate { text: raw_input.clone(), comment: None });
         }
 
         // Viterbi DP: only on complete syllables
@@ -309,31 +307,22 @@ impl PinyinEngine {
             }
         }
 
-        // English dictionary prefix matching
-        if !self.en_dict.is_empty() {
-            let raw: String = remaining.concat();
-            if raw.len() >= 2 {
-                let en_upper = prefix_upper_bound(&raw);
-                let mut en_candidates: Vec<(&String, &u64)> = self.en_dict
-                    .range(raw.clone()..en_upper)
-                    .collect();
-                en_candidates.sort_by(|a, b| b.1.cmp(a.1));
-                let insert_pos = if has_invalid_seg {
-                    // Invalid pinyin: English candidates right after raw text (position 1)
-                    1.min(self.candidates.len())
-                } else {
-                    // Valid pinyin: English candidates at the end
-                    self.candidates.len()
-                };
-                let mut inserted = 0;
-                for (word, _) in en_candidates.iter().take(5) {
-                    if seen.insert((*word).clone()) {
-                        self.candidates.insert(insert_pos + inserted, Candidate {
-                            text: (*word).clone(),
-                            comment: Some("en".to_string()),
-                        });
-                        inserted += 1;
-                    }
+        // English dictionary prefix matching (only when input looks like English)
+        if !self.en_dict.is_empty() && raw_input.len() >= 3 && has_invalid_seg {
+            let en_upper = prefix_upper_bound(&raw_input);
+            let mut en_candidates: Vec<(&String, &u64)> = self.en_dict
+                .range(raw_input.clone()..en_upper)
+                .collect();
+            en_candidates.sort_by(|a, b| b.1.cmp(a.1));
+            let insert_pos = 1.min(self.candidates.len());
+            let mut inserted = 0;
+            for (word, _) in en_candidates.iter().take(5) {
+                if seen.insert((*word).clone()) {
+                    self.candidates.insert(insert_pos + inserted, Candidate {
+                        text: (*word).clone(),
+                        comment: Some("en".to_string()),
+                    });
+                    inserted += 1;
                 }
             }
         }
