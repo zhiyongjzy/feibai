@@ -324,3 +324,8 @@ columns:
 测试环境	ce shi huan jing	5000
 开发环境	kai fa huan jing	5000
 沙箱	sha xiang	5000
+长连接	chang lian jie	8000
+短连接	duan lian jie	6000
+长链接	chang lian jie	5000
+心跳包	xin tiao bao	6000
+连接池	lian jie chi	8000
