@@ -2,9 +2,9 @@
 <component>
     <name>org.freedesktop.IBus.Feibai</name>
     <description>Feibai Pinyin Input Method</description>
-    <exec>/usr/local/bin/feibai --ibus --debug</exec>
+    <exec>/usr/local/bin/feibai --ibus</exec>
     <version>0.1.0</version>
-    <author>Jiang Zhiyong</author>
+    <author>zhiyong</author>
     <license>MIT</license>
     <homepage>https://github.com/jzy/feibai</homepage>
     <textdomain>feibai</textdomain>
@@ -13,7 +13,7 @@
             <name>feibai</name>
             <language>zh</language>
             <license>MIT</license>
-            <author>Jiang Zhiyong</author>
+            <author>zhiyong</author>
             <icon></icon>
             <layout>us</layout>
             <longname>Feibai Pinyin</longname>
