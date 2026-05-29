@@ -331,7 +331,7 @@ impl PinyinEngine {
 
         let segs_str: String = remaining.join("'");
         let top5: Vec<&str> = self.candidates.iter().take(5).map(|c| c.text.as_str()).collect();
-        eprintln!("[feibai] lookup: {} → [{}] ({}个)", segs_str, top5.join(", "), self.candidates.len());
+        log_debug!("lookup: {} → [{}] ({}个)", segs_str, top5.join(", "), self.candidates.len());
     }
 
     /// Viterbi DP: find the best sentence that covers all remaining syllables
@@ -422,7 +422,7 @@ impl PinyinEngine {
             Some(c) => c.text.clone(),
             None => return vec![EngineAction::Noop],
         };
-        eprintln!("[feibai] select[{}]: {}", idx, text);
+        log_debug!("select[{}]: {}", idx, text);
 
         let offset = self.total_selected_segs();
         let remaining = &self.segments[offset..];

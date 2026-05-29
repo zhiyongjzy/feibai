@@ -68,7 +68,7 @@ impl State {
                     self.candidates.clear();
                     self.popup.hide();
                     need_commit = true;
-                    eprintln!("[feibai] commit: {}", text);
+                    log_debug!("commit: {}", text);
                 }
                 EngineAction::UpdatePreedit(text) => {
                     let len = text.len() as i32;
@@ -76,17 +76,15 @@ impl State {
                     self.preedit_text = text.clone();
                     self.update_popup(qh);
                     need_commit = true;
-                    eprintln!("[feibai] preedit: {}", text);
+                    log_debug!("preedit: {}", text);
                 }
                 EngineAction::UpdateCandidates(candidates) => {
                     self.candidates = candidates.clone();
                     self.update_popup(qh);
-                    if !candidates.is_empty() {
-                        eprint!("[feibai] candidates:");
-                        for (i, c) in candidates.iter().take(9).enumerate() {
-                            eprint!(" {}:{}", i + 1, c.text);
-                        }
-                        eprintln!();
+                    if !candidates.is_empty() && feibai_core::debug_enabled() {
+                        let cands: Vec<String> = candidates.iter().take(9)
+                            .enumerate().map(|(i, c)| format!("{}:{}", i + 1, c.text)).collect();
+                        log_debug!("candidates: {}", cands.join(" "));
                     }
                 }
                 EngineAction::Forward => {}
@@ -125,33 +123,33 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 "wl_seat" => {
                     let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(1), qh, ());
                     state.seat = Some(seat);
-                    eprintln!("[feibai] bound wl_seat v{}", version);
+                    log_info!("bound wl_seat v{}", version);
                 }
                 "zwp_input_method_manager_v2" => {
                     let mgr = registry.bind::<ZwpInputMethodManagerV2, _, _>(
                         name, version.min(1), qh, (),
                     );
                     state.im_manager = Some(mgr);
-                    eprintln!("[feibai] bound zwp_input_method_manager_v2");
+                    log_info!("bound zwp_input_method_manager_v2");
                 }
                 "wl_compositor" => {
                     let comp = registry.bind::<wl_compositor::WlCompositor, _, _>(
                         name, version.min(4), qh, (),
                     );
                     state.compositor = Some(comp);
-                    eprintln!("[feibai] bound wl_compositor v{}", version);
+                    log_info!("bound wl_compositor v{}", version);
                 }
                 "wl_shm" => {
                     let shm = registry.bind::<wl_shm::WlShm, _, _>(name, version.min(1), qh, ());
                     state.shm = Some(shm);
-                    eprintln!("[feibai] bound wl_shm");
+                    log_info!("bound wl_shm");
                 }
                 "zwp_virtual_keyboard_manager_v1" => {
                     let mgr = registry.bind::<ZwpVirtualKeyboardManagerV1, _, _>(
                         name, version.min(1), qh, (),
                     );
                     state.vk_manager = Some(mgr);
-                    eprintln!("[feibai] bound zwp_virtual_keyboard_manager_v1");
+                    log_info!("bound zwp_virtual_keyboard_manager_v1");
                 }
                 _ => {}
             }
@@ -171,7 +169,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
         _qh: &QueueHandle<Self>,
     ) {
         if let wl_seat::Event::Name { name } = event {
-            eprintln!("[feibai] seat name: {}", name);
+            log_info!("seat name: {}", name);
         }
     }
 }
@@ -218,8 +216,8 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for State {
     ) {
         if let zwp_input_popup_surface_v2::Event::TextInputRectangle { x, y, width, height } = event
         {
-            eprintln!(
-                "[feibai] popup text_input_rectangle: {}x{} at ({},{})",
+            log_debug!(
+                "popup text_input_rectangle: {}x{} at ({},{})",
                 width, height, x, y
             );
         }
@@ -239,7 +237,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
     ) {
         match event {
             zwp_input_method_v2::Event::Activate => {
-                eprintln!("[feibai] activate");
+                log_debug!("activate");
                 state.active = true;
                 state.engine.reset();
                 state.preedit_text.clear();
@@ -253,7 +251,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
                 }
             }
             zwp_input_method_v2::Event::Deactivate => {
-                eprintln!("[feibai] deactivate");
+                log_debug!("deactivate");
                 state.active = false;
                 state.engine.reset();
                 state.preedit_text.clear();
@@ -284,10 +282,10 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
         match event {
             zwp_input_method_keyboard_grab_v2::Event::Keymap { format, fd, size } => {
                 if format != WEnum::Value(wl_keyboard::KeymapFormat::XkbV1) {
-                    eprintln!("[feibai] keymap: unsupported format {:?}", format);
+                    log_error!("keymap: unsupported format {:?}", format);
                     return;
                 }
-                eprintln!("[feibai] keymap event: size={}", size);
+                log_info!("keymap event: size={}", size);
 
                 // Parse keymap with xkb first
                 let keymap = unsafe {
@@ -323,18 +321,18 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                                 vk_size as u32,
                             );
                             state.vk_keymap_fd = Some(file);
-                            eprintln!("[feibai] vk keymap set ({} bytes)", vk_size);
+                            log_info!("vk keymap set ({} bytes)", vk_size);
                         } else {
-                            eprintln!("[feibai] ERROR: memfd_create failed");
+                            log_error!("memfd_create failed");
                         }
                     }
 
                     let xkb_state = xkbcommon::xkb::State::new(&keymap);
                     state.xkb_keymap = Some(keymap);
                     state.xkb_state = Some(xkb_state);
-                    eprintln!("[feibai] xkb keymap loaded");
+                    log_info!("xkb keymap loaded");
                 } else {
-                    eprintln!("[feibai] ERROR: xkb keymap parse failed");
+                    log_error!("xkb keymap parse failed");
                 }
             }
             zwp_input_method_keyboard_grab_v2::Event::Key {
@@ -391,7 +389,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                     // 0x54 = 'T'
                     state.theme = state.theme.next();
                     state.popup.set_theme(state.theme);
-                    eprintln!("[feibai] theme switched to: {}", theme_name(state.theme));
+                    log_info!("theme switched to: {}", theme_name(state.theme));
                     // Re-render popup if visible
                     if !state.candidates.is_empty() {
                         let qh = qh.clone();
@@ -451,7 +449,7 @@ fn load_engine() -> PinyinEngine {
     let feibai_dir = dirs::config_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
         .join("feibai");
-    eprintln!("[feibai] dir: {}", feibai_dir.display());
+    log_info!("dir: {}", feibai_dir.display());
 
     // Scan for all *.dict.yaml in feibai dir and fallback locations
     // Convention: *.en.dict.yaml → English dict, others → Chinese pinyin dict
@@ -494,12 +492,12 @@ fn load_engine() -> PinyinEngine {
     }
 
     if cn_paths.is_empty() {
-        eprintln!("[feibai] ERROR: cannot find any dict files in {}", feibai_dir.display());
-        eprintln!("[feibai] place feibai.base.dict.yaml in ~/.config/feibai/");
+        log_error!("cannot find any dict files in {}", feibai_dir.display());
+        log_error!("place feibai.base.dict.yaml in ~/.config/feibai/");
         std::process::exit(1);
     }
     for p in &cn_paths {
-        eprintln!("[feibai] loading dict: {}", p);
+        log_info!("loading dict: {}", p);
     }
     let mut engine = PinyinEngine::from_files(
         &cn_paths.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
@@ -507,18 +505,18 @@ fn load_engine() -> PinyinEngine {
     .expect("failed to load dicts");
 
     for p in &en_paths {
-        eprintln!("[feibai] loading en dict: {}", p);
+        log_info!("loading en dict: {}", p);
         if let Err(e) = engine.load_en_dict(p) {
-            eprintln!("[feibai] WARNING: {}", e);
+            log_error!("WARNING: {}", e);
         }
     }
 
     let user_dict_path = feibai_dir.join("user.dict.txt");
     engine.set_userdb_path(&user_dict_path);
     if user_dict_path.exists() {
-        eprintln!("[feibai] loading user dict: {}", user_dict_path.display());
+        log_info!("loading user dict: {}", user_dict_path.display());
         if let Err(e) = engine.load_userdb(&user_dict_path) {
-            eprintln!("[feibai] WARNING: {}", e);
+            log_error!("WARNING: {}", e);
         }
     }
 
@@ -532,8 +530,8 @@ fn setup_logging() {
     let _ = std::fs::create_dir_all(&log_dir);
     let log_path = log_dir.join("feibai.log");
 
-    // Rotate: if log exceeds 2MB, rename to .log.old and start fresh
-    const MAX_LOG_SIZE: u64 = 2 * 1024 * 1024;
+    // Rotate: if log exceeds 10MB, rename to .log.old and start fresh
+    const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
     if let Ok(meta) = std::fs::metadata(&log_path) {
         if meta.len() > MAX_LOG_SIZE {
             let old_path = log_dir.join("feibai.log.old");
@@ -555,7 +553,7 @@ fn setup_logging() {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logging();
-    eprintln!("\n[feibai] === started at {:?} ===", std::time::SystemTime::now());
+    log_info!("=== started ===");
 
     let args: Vec<String> = std::env::args().collect();
 
@@ -571,7 +569,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         && std::env::var("WAYLAND_DISPLAY").is_ok();
 
     if !wayland_ok {
-        eprintln!("[feibai] no Wayland display, trying IBus mode");
+        log_info!("no Wayland display, trying IBus mode");
         let engine = load_engine();
         futures_lite::future::block_on(ibus::run_ibus(engine))?;
         return Ok(());
@@ -589,7 +587,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
         .join("feibai");
     let theme = load_theme_from_config(&feibai_dir);
-    eprintln!("[feibai] theme: {:?}", theme_name(theme));
+    log_info!("theme: {:?}", theme_name(theme));
 
     let mut state = State {
         im_manager: None,
@@ -620,9 +618,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let (Some(mgr), Some(seat)) = (&state.im_manager, &state.seat) {
         let im = mgr.get_input_method(seat, &qh, ());
         state.input_method = Some(im);
-        eprintln!("[feibai] created input method");
+        log_info!("created input method");
     } else {
-        eprintln!("[feibai] ERROR: compositor does not support input-method-v2 or no seat found");
+        log_error!("compositor does not support input-method-v2 or no seat found");
         std::process::exit(1);
     }
 
@@ -630,9 +628,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let (Some(vk_mgr), Some(seat)) = (&state.vk_manager, &state.seat) {
         let vk = vk_mgr.create_virtual_keyboard(seat, &qh, ());
         state.virtual_keyboard = Some(vk);
-        eprintln!("[feibai] created virtual keyboard");
+        log_info!("created virtual keyboard");
     } else {
-        eprintln!("[feibai] WARNING: no virtual keyboard support, key forwarding disabled");
+        log_error!("no virtual keyboard support, key forwarding disabled");
     }
 
     // Virtual keyboard needs a keymap before it can send keys
@@ -643,7 +641,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop: EventLoop<State> = EventLoop::try_new()?;
     WaylandSource::new(conn, event_queue).insert(event_loop.handle())?;
 
-    eprintln!("[feibai] running");
+    log_info!("running");
     event_loop.run(None, &mut state, |_| {})?;
     Ok(())
 }
