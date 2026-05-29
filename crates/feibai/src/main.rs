@@ -525,7 +525,38 @@ fn load_engine() -> PinyinEngine {
     engine
 }
 
+fn setup_logging() {
+    let log_dir = dirs::state_dir()
+        .unwrap_or_else(|| dirs::cache_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp")))
+        .join("feibai");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("feibai.log");
+
+    // Rotate: if log exceeds 2MB, rename to .log.old and start fresh
+    const MAX_LOG_SIZE: u64 = 2 * 1024 * 1024;
+    if let Ok(meta) = std::fs::metadata(&log_path) {
+        if meta.len() > MAX_LOG_SIZE {
+            let old_path = log_dir.join("feibai.log.old");
+            let _ = std::fs::rename(&log_path, &old_path);
+        }
+    }
+
+    if let Ok(log_file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        use std::os::unix::io::IntoRawFd;
+        let fd = log_file.into_raw_fd();
+        // Redirect stderr (fd 2) to log file
+        unsafe { libc::dup2(fd, 2); libc::close(fd); }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    setup_logging();
+    eprintln!("\n[feibai] === started at {:?} ===", std::time::SystemTime::now());
+
     let args: Vec<String> = std::env::args().collect();
 
     // --ibus flag forces IBus mode (launched by ibus-daemon)
