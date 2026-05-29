@@ -99,6 +99,31 @@ theme = "dark"   # light/dark/flat/blue/sakura/ocean/lavender/tangerine/mint
 
 词库格式兼容 Rime YAML dict 格式。详见 [data/dicts/SOURCES.md](data/dicts/SOURCES.md)。
 
+## 日志与调试
+
+日志文件位于 `~/.local/state/feibai/feibai.log`，自动轮转（>10MB 时重命名为 `.log.old`）。
+
+启用 debug 详细日志（记录每次按键、候选列表、选词）：
+
+```bash
+# 方式一：创建 sentinel 文件（推荐，适用于 ibus-daemon 拉起的场景）
+touch ~/.config/feibai/.debug
+ibus restart
+
+# 方式二：CLI flag（手动启动时）
+feibai --ibus --debug
+
+# 方式三：环境变量（直接运行时）
+FEIBAI_DEBUG=1 feibai --ibus
+```
+
+关闭 debug：
+
+```bash
+rm ~/.config/feibai/.debug
+ibus restart
+```
+
 ## 测试
 
 ```bash
