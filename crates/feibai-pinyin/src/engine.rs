@@ -11,6 +11,7 @@ struct DictEntry {
 }
 
 const PAGE_SIZE: usize = 9;
+const MAX_USER_WEIGHT: u64 = 10_000_000;
 
 pub struct PinyinEngine {
     table: BTreeMap<String, Vec<DictEntry>>,
@@ -202,8 +203,8 @@ impl PinyinEngine {
     }
 
     fn cmp_entry(a: &DictEntry, b: &DictEntry) -> std::cmp::Ordering {
-        // User entries always rank above non-user entries
-        a.user.cmp(&b.user).then(a.weight.cmp(&b.weight))
+        // Sort purely by weight — user words earn their rank through selection frequency
+        a.weight.cmp(&b.weight)
     }
 
     fn update_segments(&mut self) {
@@ -310,22 +311,20 @@ impl PinyinEngine {
             }
         }
 
-        // English dictionary prefix matching (only when input looks like English)
-        if !self.en_dict.is_empty() && raw_input.len() >= 3 && has_invalid_seg {
+        // English dictionary matching (only when input is clearly non-pinyin AND >= 4 chars)
+        if !self.en_dict.is_empty() && raw_input.len() >= 4 && has_invalid_seg {
             let en_upper = prefix_upper_bound(&raw_input);
             let mut en_candidates: Vec<(&String, &u64)> = self.en_dict
                 .range(raw_input.clone()..en_upper)
                 .collect();
             en_candidates.sort_by(|a, b| b.1.cmp(a.1));
-            let insert_pos = 1.min(self.candidates.len());
-            let mut inserted = 0;
+            // Append after Chinese candidates instead of inserting near top
             for (word, _) in en_candidates.iter().take(5) {
                 if seen.insert((*word).clone()) {
-                    self.candidates.insert(insert_pos + inserted, Candidate {
+                    self.candidates.push(Candidate {
                         text: (*word).clone(),
                         comment: Some("en".to_string()),
                     });
-                    inserted += 1;
                 }
             }
         }
@@ -451,6 +450,11 @@ impl PinyinEngine {
     }
 
     fn learn_from_commit(&mut self, sentence: &str, pinyin_segs: &[String]) {
+        // Don't learn pure ASCII strings (raw pinyin / typo fragments)
+        if sentence.chars().all(|c| c.is_ascii()) {
+            return;
+        }
+
         let key: String = pinyin_segs.concat();
         let is_single_char = sentence.chars().count() <= 1;
 
@@ -479,6 +483,7 @@ impl PinyinEngine {
                             entry.weight = entry.weight.saturating_add(1);
                         }
                     }
+                    entry.weight = entry.weight.min(MAX_USER_WEIGHT);
                     changed = entry.weight != old_weight || !entry.user;
                     entry.user = true;
                     persist_weight = entry.weight;
@@ -506,7 +511,7 @@ impl PinyinEngine {
         let new_weight;
         if let Some(entries) = self.table.get_mut(&key) {
             if let Some(entry) = entries.iter_mut().find(|e| e.word == sentence) {
-                entry.weight = entry.weight.saturating_add(1);
+                entry.weight = entry.weight.saturating_add(1).min(MAX_USER_WEIGHT);
                 entry.user = true;
                 new_weight = entry.weight;
             } else {
