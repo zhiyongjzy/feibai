@@ -4,7 +4,7 @@ use async_lock::Mutex;
 use zbus::object_server::SignalEmitter;
 use zbus::{connection, interface, zvariant};
 
-use feibai_core::{Candidate, EngineAction, Engine, KeyEvent, KeyState, Modifiers};
+use feibai_core::{Candidate, EngineAction, Engine, KeyEvent, KeyState, Modifiers, log_info};
 use feibai_pinyin::PinyinEngine;
 
 // IBus GVariant helpers
@@ -222,7 +222,7 @@ struct FeibaiFactory {
 impl FeibaiFactory {
     #[zbus(name = "CreateEngine")]
     async fn create_engine(&self, name: &str) -> zbus::fdo::Result<zvariant::OwnedObjectPath> {
-        eprintln!("[feibai] CreateEngine called: {}", name);
+        log_info!("CreateEngine called: {}", name);
 
         let mut count = self.engine_count.lock().await;
         *count += 1;
@@ -238,7 +238,7 @@ impl FeibaiFactory {
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
 
-        eprintln!("[feibai] engine created at {}", path);
+        log_info!("engine created at {}", path);
         Ok(zvariant::OwnedObjectPath::try_from(path).unwrap())
     }
 }
@@ -293,16 +293,16 @@ fn ibus_to_key_event(keyval: u32, state: u32, is_release: bool) -> KeyEvent {
 }
 
 pub async fn run_ibus(engine: PinyinEngine) -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!("[feibai] starting IBus engine mode");
+    log_info!("starting IBus engine mode");
 
     let addr = get_ibus_address().ok_or("cannot find IBus address. Is ibus-daemon running?")?;
-    eprintln!("[feibai] IBus address: {}", addr);
+    log_info!("IBus address: {}", addr);
 
     let conn = connection::Builder::address(addr.as_str())?
         .build()
         .await?;
 
-    eprintln!("[feibai] connected to IBus bus");
+    log_info!("connected to IBus bus");
 
     let engine = Arc::new(Mutex::new(engine));
 
@@ -320,7 +320,7 @@ pub async fn run_ibus(engine: PinyinEngine) -> Result<(), Box<dyn std::error::Er
     conn.request_name("org.freedesktop.IBus.Feibai")
         .await?;
 
-    eprintln!("[feibai] IBus factory registered, waiting for CreateEngine...");
+    log_info!("IBus factory registered, waiting for CreateEngine...");
 
     // Keep running
     loop {
