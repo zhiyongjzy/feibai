@@ -95,7 +95,7 @@ theme = "dark"   # light/dark/flat/blue/sakura/ocean/lavender/tangerine/mint
 
 - `feibai.base.dict.yaml` — 基础词库（35 万词条）
 - `feibai.extra.dict.yaml` — 扩展词库
-- `user.dict.yaml` — 用户词库（自动生成）
+- `user.dict.txt` — 用户词库（自动生成，选词后自动学习）
 
 词库格式兼容 Rime YAML dict 格式。详见 [data/dicts/SOURCES.md](data/dicts/SOURCES.md)。
 
