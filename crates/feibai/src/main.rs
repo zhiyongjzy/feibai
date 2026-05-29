@@ -552,10 +552,21 @@ fn setup_logging() {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+
+    // --debug flag or ~/.config/feibai/.debug file enables verbose logging
+    if args.iter().any(|a| a == "--debug")
+        || std::path::Path::new(&format!(
+            "{}/.config/feibai/.debug",
+            std::env::var("HOME").unwrap_or_default()
+        ))
+        .exists()
+    {
+        unsafe { std::env::set_var("FEIBAI_DEBUG", "1"); }
+    }
+
     setup_logging();
     log_info!("=== started ===");
-
-    let args: Vec<String> = std::env::args().collect();
 
     // --ibus flag forces IBus mode (launched by ibus-daemon)
     if args.iter().any(|a| a == "--ibus") {
