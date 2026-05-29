@@ -247,6 +247,9 @@ impl PinyinEngine {
         };
 
         let mut seen = HashSet::new();
+        if has_invalid_seg && raw_input.len() >= 3 {
+            seen.insert(raw_input.clone());
+        }
         if let Some(ref s) = sentence {
             seen.insert(s.clone());
             self.candidates.push(Candidate { text: s.clone(), comment: None });
