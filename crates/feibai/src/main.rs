@@ -341,9 +341,18 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                 key,
                 state: key_state,
             } => {
+                let pressed = key_state == WEnum::Value(wl_keyboard::KeyState::Pressed);
+                let raw_state = if pressed { 1u32 } else { 0u32 };
+
+                // IME 未激活时 (如 fuzzel 等不使用 text-input-v3 的应用):
+                // 按键直接转发给 virtual keyboard，不做输入法处理
                 if !state.active {
+                    if let (Some(vk), Some(_)) = (&state.virtual_keyboard, &state.vk_keymap_fd) {
+                        vk.key(time, key, raw_state);
+                    }
                     return;
                 }
+
                 let xkb_state = match &state.xkb_state {
                     Some(s) => s,
                     None => return,
@@ -353,10 +362,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                 let keysym = xkb_state.key_get_one_sym(keycode);
                 let utf32 = xkb_state.key_get_utf32(keycode);
                 let unicode = char::from_u32(utf32).filter(|c| !c.is_control());
-
-                let pressed = key_state == WEnum::Value(wl_keyboard::KeyState::Pressed);
                 let ks = if pressed { KeyState::Press } else { KeyState::Release };
-                let raw_state = if pressed { 1u32 } else { 0u32 };
 
                 let modifiers = Modifiers {
                     ctrl: xkb_state.mod_name_is_active(
