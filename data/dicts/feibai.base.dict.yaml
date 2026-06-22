@@ -345,7 +345,7 @@ columns:
 相	xiang	21292
 吗	ma	21245
 说道	shuo dao	21168
-世纪	shi ji	21100
+世纪	shi ji	12000
 为了	wei le	21073
 应该	ying gai	21067
 之一	zhi yi	21053
@@ -679,7 +679,7 @@ columns:
 国内	guo nei	12450
 分布	fen bu	12435
 最高	zui gao	12430
-部队	bu dui	12400
+部队	bu dui	8000
 河	he	12374
 它们	ta men	12359
 集团	ji tuan	12298
@@ -698,7 +698,7 @@ columns:
 范围	fan wei	12101
 平	ping	12100
 引起	yin qi	12074
-实际	shi ji	12010
+实际	shi ji	22000
 其实	qi shi	11950
 不仅	bu jin	11895
 取得	qu de	11882
@@ -729,7 +729,7 @@ columns:
 传统	chuan tong	11445
 管	guan	11444
 场	chang	11435
-受到	shou dao	11428
+受到	shou dao	8000
 跑	pao	11414
 全部	quan bu	11398
 法国	fa guo	11361
@@ -1065,7 +1065,7 @@ columns:
 重新	chong xin	8297
 广泛	guang fan	8276
 分为	fen wei	8259
-知识	zhi shi	8254
+知识	zhi shi	7000
 别人	bie ren	8252
 综合	zong he	8250
 出口	chu kou	8237
@@ -1849,7 +1849,7 @@ columns:
 山东	shan dong	4881
 厚	hou	4878
 加工	jia gong	4877
-只是	zhi shi	4875
+只是	zhi shi	9000
 洪山区	hong shan qu	4872
 烧	shao	4867
 两侧	liang ce	4863
@@ -4429,7 +4429,7 @@ columns:
 缓	huan	1824
 名单	ming dan	1823
 定义	ding yi	1823
-收到	shou dao	1823
+收到	shou dao	12000
 财务	cai wu	1822
 一辈子	yi bei zi	1821
 瘦	shou	1821
@@ -9596,7 +9596,7 @@ columns:
 锥	zhui	696
 震撼	zhen han	696
 青睐	qing lai	696
-不对	bu dui	695
+不对	bu dui	13000
 交错	jiao cuo	695
 力图	li tu	695
 哀	ai	695
@@ -11451,7 +11451,7 @@ columns:
 李肇星	li zhao xing	553
 沿线	yan xian	553
 深圳市	shen zhen shi	553
-班子	ban zi	553
+班子	ban zi	500
 用意	yong yi	553
 严禁	yan jin	552
 大石	da shi	552
@@ -16159,7 +16159,7 @@ columns:
 甲骨文	jia gu wen	343
 相宜	xiang yi	343
 第一台	di yi tai	343
-编译	bian yi	343
+编译	bian yi	8000
 网络游戏	wang luo you xi	343
 萝卜	luo bo	343
 薄膜	bao mo	343
@@ -30977,7 +30977,7 @@ columns:
 曲线美	qu xian mei	130
 未知数	wei zhi shu	130
 机群	ji qun	130
-板子	ban zi	130
+板子	ban zi	2000
 栵	lie	130
 根子	gen zi	130
 武斗	wu dou	130
@@ -31567,7 +31567,7 @@ columns:
 低收入	di shou ru	126
 体统	ti tong	126
 供销社	gong xiao she	126
-保温	bao wen	126
+保温	bao wen	100
 俾斯麦	bi si mai	126
 写生	xie sheng	126
 出口量	chu kou liang	126
@@ -75426,7 +75426,7 @@ columns:
 报名费	bao ming fei	22
 报告单	bao gao dan	22
 报数	bao shu	22
-报文	bao wen	22
+报文	bao wen	2000
 抽水马桶	chou shui ma tong	22
 拉姆斯	la mu si	22
 拉巴	la ba	22
@@ -291993,7 +291993,7 @@ columns:
 重议	zhong yi	3
 重设键	zhong she jian	3
 重译	chong yi	3
-重试	zhong shi	3
+重试	chong shi	5000
 重话	zhong hua	3
 重财	zhong cai	3
 重责大任	zhong ze da ren	3
@@ -354039,3 +354039,59 @@ columns:
 鿼	jia	1
 鿾	lang	1
 鿿	xing	1
+好的	hao de	15000
+帮我	bang wo	12000
+要不要	yao bu yao	8000
+能不能	neng bu neng	8000
+给我	gei wo	10000
+给你	gei ni	8000
+下一步	xia yi bu	6000
+好了	hao le	12000
+不需要	bu xu yao	8000
+不知道	bu zhi dao	15000
+告诉我	gao su wo	6000
+不一定	bu yi ding	6000
+不支持	bu zhi chi	5000
+对不对	dui bu dui	5000
+做什么	zuo shen me	6000
+跑起来	pao qi lai	4000
+回答我	hui da wo	4000
+不应该	bu ying gai	5000
+有问题	you wen ti	8000
+比较好	bi jiao hao	5000
+还需要	hai xu yao	5000
+还可以	hai ke yi	6000
+并没有	bing mei you	5000
+试下	shi xia	5000
+查下	cha xia	4000
+搜下	sou xia	3000
+读下	du xia	3000
+说下	shuo xia	3000
+改了	gai le	4000
+换了	huan le	4000
+坏了	huai le	5000
+满了	man le	4000
+试了	shi le	4000
+做了	zuo le	5000
+有个	you ge	5000
+还没	hai mei	6000
+还在	hai zai	6000
+跟你	gen ni	5000
+跟我	gen wo	5000
+跟她	gen ta	4000
+发个	fa ge	4000
+给个	gei ge	4000
+写个	xie ge	4000
+找个	zhao ge	4000
+做一个	zuo yi ge	4000
+某一个	mou yi ge	3000
+是吧	shi ba	6000
+对吧	dui ba	5000
+好用	hao yong	5000
+不止是	bu zhi shi	3000
+啥情况	sha qing kuang	4000
+最佳实践	zui jia shi jian	5000
+重连	chong lian	4000
+抓包	zhua bao	4000
+刷机包	shua ji bao	3000
+上电	shang dian	4000
