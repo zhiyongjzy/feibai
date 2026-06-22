@@ -42,14 +42,33 @@ target/release/feibai
 
 ## 安装
 
+### 快速安装（推荐）
+
+无需 Rust 环境，自动下载预编译二进制：
+
 ```bash
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/zhiyongjzy/feibai/main/install.sh | bash
 ```
 
-脚本会：
-1. 编译 release binary → `~/.local/bin/feibai`
-2. 复制词库 → `~/.config/feibai/`
-3. 安装 IBus 组件 XML（如检测到 IBus）
+### 从源码构建
+
+```bash
+git clone https://github.com/zhiyongjzy/feibai.git
+cd feibai
+./install.sh --from-source
+```
+
+### 选项
+
+| 参数 | 说明 |
+|------|------|
+| `--from-source` | 使用 cargo 本地编译（需要 Rust 工具链） |
+| `--force-dicts` | 覆盖已有词库文件（用于更新词库） |
+
+### 运行时依赖
+
+- `libxkbcommon0`（Ubuntu/Debian 桌面环境默认已安装）
+- IBus（GNOME 默认已安装）
 
 ## 使用
 
