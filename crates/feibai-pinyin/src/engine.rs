@@ -456,7 +456,18 @@ impl PinyinEngine {
         }
 
         let key: String = pinyin_segs.concat();
-        let is_single_char = sentence.chars().count() <= 1;
+        let char_count = sentence.chars().count();
+        let is_single_char = char_count <= 1;
+
+        // Don't learn multi-char words with too-short keys (prefix match artifacts)
+        // Each Chinese character needs at least 1 pinyin syllable (>=2 chars typically)
+        if !is_single_char && pinyin_segs.len() < char_count {
+            return;
+        }
+        // Reject if any segment is not a valid pinyin syllable (typo fragments)
+        if !is_single_char && pinyin_segs.iter().any(|s| !self.syllables.contains(s.as_str())) {
+            return;
+        }
 
         // For single chars: 2-selection promotion strategy
         // 1st select: jump to just below current top (top - 1)
