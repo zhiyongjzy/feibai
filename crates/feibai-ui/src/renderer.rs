@@ -18,7 +18,6 @@ pub struct RenderConfig {
     pub fg_color: [u8; 4],
     pub preedit_color: [u8; 4],
     pub index_color: [u8; 4],     // color for "1." "2." etc
-    pub highlight_color: [u8; 4],
     pub border_color: [u8; 4],
     pub separator_color: [u8; 4],
     pub padding_h: u32,
@@ -79,7 +78,6 @@ impl Theme {
                 fg_color: [255, 50, 50, 50],
                 preedit_color: [255, 100, 100, 100],
                 index_color: [255, 66, 133, 244],
-                highlight_color: [255, 66, 133, 244],
                 border_color: [255, 210, 210, 210],
                 separator_color: [255, 230, 230, 230],
                 padding_h: 12,
@@ -95,7 +93,6 @@ impl Theme {
                 fg_color: [255, 220, 220, 225],
                 preedit_color: [255, 150, 150, 160],
                 index_color: [255, 100, 180, 255],
-                highlight_color: [255, 100, 180, 255],
                 border_color: [180, 80, 80, 90],
                 separator_color: [120, 100, 100, 110],
                 padding_h: 12,
@@ -111,7 +108,6 @@ impl Theme {
                 fg_color: [255, 30, 30, 30],
                 preedit_color: [255, 80, 80, 80],
                 index_color: [255, 120, 120, 120],
-                highlight_color: [255, 60, 60, 60],
                 border_color: [255, 200, 200, 200],
                 separator_color: [255, 220, 220, 220],
                 padding_h: 10,
@@ -127,7 +123,6 @@ impl Theme {
                 fg_color: [255, 40, 40, 40],
                 preedit_color: [255, 70, 70, 70],
                 index_color: [255, 25, 118, 210],
-                highlight_color: [40, 25, 118, 210],
                 border_color: [255, 187, 222, 251],
                 separator_color: [255, 227, 242, 253],
                 padding_h: 12,
@@ -143,7 +138,6 @@ impl Theme {
                 fg_color: [255, 80, 40, 60],
                 preedit_color: [255, 180, 100, 130],
                 index_color: [255, 219, 112, 147],
-                highlight_color: [255, 219, 112, 147],
                 border_color: [255, 245, 200, 215],
                 separator_color: [255, 250, 218, 228],
                 padding_h: 12,
@@ -159,7 +153,6 @@ impl Theme {
                 fg_color: [255, 20, 60, 80],
                 preedit_color: [255, 80, 140, 160],
                 index_color: [255, 0, 150, 180],
-                highlight_color: [255, 0, 150, 180],
                 border_color: [255, 178, 230, 240],
                 separator_color: [255, 200, 238, 245],
                 padding_h: 12,
@@ -175,7 +168,6 @@ impl Theme {
                 fg_color: [255, 55, 30, 80],
                 preedit_color: [255, 140, 100, 170],
                 index_color: [255, 138, 92, 200],
-                highlight_color: [255, 138, 92, 200],
                 border_color: [255, 220, 200, 240],
                 separator_color: [255, 232, 218, 248],
                 padding_h: 12,
@@ -191,7 +183,6 @@ impl Theme {
                 fg_color: [255, 70, 40, 20],
                 preedit_color: [255, 160, 110, 60],
                 index_color: [255, 230, 120, 30],
-                highlight_color: [255, 230, 120, 30],
                 border_color: [255, 250, 215, 180],
                 separator_color: [255, 252, 230, 200],
                 padding_h: 12,
@@ -207,7 +198,6 @@ impl Theme {
                 fg_color: [255, 25, 60, 45],
                 preedit_color: [255, 80, 145, 110],
                 index_color: [255, 22, 163, 100],
-                highlight_color: [255, 22, 163, 100],
                 border_color: [255, 187, 237, 210],
                 separator_color: [255, 210, 245, 225],
                 padding_h: 12,
@@ -269,22 +259,27 @@ impl CandidateRenderer {
         preedit_buf.set_text(&mut self.font_system, preedit, attrs, Shaping::Advanced);
         preedit_buf.shape_until_scroll(&mut self.font_system, false);
 
-        // Measure candidate line width by summing each segment
+        // Measure candidate line width and keep buffers for reuse in drawing
         let spacing = (cfg.font_size * 0.8) as f32;
         let mut cand_width: f32 = 0.0;
+        let mut cand_buffers: Vec<(Buffer, f32, Buffer, f32)> = Vec::new();
         for (i, cand) in candidates.iter().take(cfg.max_candidates).enumerate() {
             let idx_text = format!("{}.", i + 1);
             let mut idx_buf = Buffer::new(&mut self.font_system, metrics);
             idx_buf.set_size(&mut self.font_system, Some(f32::MAX), None);
             idx_buf.set_text(&mut self.font_system, &idx_text, attrs, Shaping::Advanced);
             idx_buf.shape_until_scroll(&mut self.font_system, false);
-            cand_width += measure_buffer_width(&idx_buf);
+            let idx_w = measure_buffer_width(&idx_buf);
+            cand_width += idx_w;
 
             let mut text_buf = Buffer::new(&mut self.font_system, metrics);
             text_buf.set_size(&mut self.font_system, Some(f32::MAX), None);
             text_buf.set_text(&mut self.font_system, &cand.text, attrs, Shaping::Advanced);
             text_buf.shape_until_scroll(&mut self.font_system, false);
-            cand_width += measure_buffer_width(&text_buf);
+            let text_w = measure_buffer_width(&text_buf);
+            cand_width += text_w;
+
+            cand_buffers.push((idx_buf, idx_w, text_buf, text_w));
 
             if i + 1 < candidates.len().min(cfg.max_candidates) {
                 cand_width += spacing;
@@ -392,45 +387,31 @@ impl CandidateRenderer {
                 cfg.index_color[0],
             );
 
-            // Render each candidate segment individually for colored indices
+            // Render each candidate using pre-measured buffers
             let mut x_offset = pad_h as i32;
-            for (i, cand) in candidates.iter().take(cfg.max_candidates).enumerate() {
-                // Draw index "N."
-                let idx_text = format!("{}.", i + 1);
-                let mut idx_buf = Buffer::new(&mut self.font_system, metrics);
-                idx_buf.set_size(&mut self.font_system, Some(f32::MAX), None);
-                idx_buf.set_text(&mut self.font_system, &idx_text, attrs, Shaping::Advanced);
-                idx_buf.shape_until_scroll(&mut self.font_system, false);
-                let idx_w = measure_buffer_width(&idx_buf);
+            for (idx_buf, idx_w, cand_buf, cand_w) in &cand_buffers {
                 draw_buffer(
                     &mut pixmap,
                     &mut self.font_system,
                     &mut self.swash_cache,
-                    &idx_buf,
+                    idx_buf,
                     x_offset,
                     y_offset,
                     idx_color,
                 );
-                x_offset += idx_w as i32;
+                x_offset += *idx_w as i32;
 
-                // Draw candidate text
-                let mut cand_buf = Buffer::new(&mut self.font_system, metrics);
-                cand_buf.set_size(&mut self.font_system, Some(f32::MAX), None);
-                cand_buf.set_text(&mut self.font_system, &cand.text, attrs, Shaping::Advanced);
-                cand_buf.shape_until_scroll(&mut self.font_system, false);
-                let cand_w = measure_buffer_width(&cand_buf);
                 draw_buffer(
                     &mut pixmap,
                     &mut self.font_system,
                     &mut self.swash_cache,
-                    &cand_buf,
+                    cand_buf,
                     x_offset,
                     y_offset,
                     fg_color,
                 );
-                x_offset += cand_w as i32;
+                x_offset += *cand_w as i32;
 
-                // Spacing between candidates
                 x_offset += (cfg.font_size * 0.8) as i32;
             }
         }

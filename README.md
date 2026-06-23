@@ -7,7 +7,7 @@
 - **双模式运行** — Wayland 原生（input-method-v2）+ IBus（GNOME/KDE）
 - **整句输入** — Viterbi DP 分词，自动选择最优路径
 - **用户词学习** — 去重 + 权重累加，常用词自动靠前
-- **9 种主题** — Light / Dark / Flat / Blue / Sakura / Ocean / Lavender / Tangerine / Mint
+- **9 种主题** — Light / Dark / Flat / Blue / Sakura / Ocean / Lavender / Tangerine / Mint（仅 Wayland 模式，IBus 使用系统候选窗）
 - **超轻量** — 单一 ~8MB 二进制，3 线程 async-io，无 tokio 依赖
 - **MIT 词库** — 35 万词条，无 GPL 污染
 
