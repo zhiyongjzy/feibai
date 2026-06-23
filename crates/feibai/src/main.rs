@@ -349,6 +349,8 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                 if !state.active {
                     if let (Some(vk), Some(_)) = (&state.virtual_keyboard, &state.vk_keymap_fd) {
                         vk.key(time, key, raw_state);
+                    } else {
+                        log_debug!("key forward dropped: no virtual keyboard");
                     }
                     return;
                 }
@@ -390,9 +392,8 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                     state: ks,
                 };
 
-                // Ctrl+Shift+T: cycle theme
-                if pressed && modifiers.ctrl && modifiers.shift && keysym.raw() == 0x54 {
-                    // 0x54 = 'T'
+                // Ctrl+Shift+Backslash: cycle theme
+                if pressed && modifiers.ctrl && modifiers.shift && keysym.raw() == 0x5c {
                     state.theme = state.theme.next();
                     state.popup.set_theme(state.theme);
                     log_info!("theme switched to: {}", theme_name(state.theme));
@@ -425,6 +426,8 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                         if pressed {
                             state.forwarded_keys.insert(key);
                         }
+                    } else {
+                        log_debug!("key forward dropped: no virtual keyboard");
                     }
                 } else {
                     let qh = qh.clone();
@@ -467,7 +470,9 @@ fn load_engine() -> PinyinEngine {
         cn_paths.push(base_in_dir.to_string_lossy().to_string());
     }
     if let Ok(entries) = std::fs::read_dir(&feibai_dir) {
-        for entry in entries.flatten() {
+        let mut dict_entries: Vec<_> = entries.flatten().collect();
+        dict_entries.sort_by_key(|e| e.file_name());
+        for entry in dict_entries {
             let path = entry.path();
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 if !name.ends_with(".dict.yaml") { continue; }
@@ -585,6 +590,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wayland_ok = Connection::connect_to_env().is_ok()
         && std::env::var("WAYLAND_DISPLAY").is_ok();
 
+    // GNOME (Mutter) does not implement input-method-v2, go straight to IBus
+    if let Ok(desktop) = std::env::var("XDG_CURRENT_DESKTOP") {
+        if desktop.to_lowercase().contains("gnome") {
+            log_info!("GNOME detected, using IBus mode");
+            let engine = load_engine();
+            futures_lite::future::block_on(ibus::run_ibus(engine))?;
+            return Ok(());
+        }
+    }
+
     if !wayland_ok {
         log_info!("no Wayland display, trying IBus mode");
         let engine = load_engine();
@@ -631,14 +646,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     display.get_registry(&qh, ());
     event_queue.roundtrip(&mut state)?;
 
-    // Create input method from manager + seat
+    // Create input method from manager + seat; fall back to IBus if unavailable
     if let (Some(mgr), Some(seat)) = (&state.im_manager, &state.seat) {
         let im = mgr.get_input_method(seat, &qh, ());
         state.input_method = Some(im);
         log_info!("created input method");
     } else {
-        log_error!("compositor does not support input-method-v2 or no seat found");
-        std::process::exit(1);
+        log_info!("compositor does not support input-method-v2, falling back to IBus");
+        let engine = load_engine();
+        futures_lite::future::block_on(ibus::run_ibus(engine))?;
+        return Ok(());
     }
 
     // Create virtual keyboard for forwarding keys

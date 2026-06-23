@@ -547,7 +547,10 @@ impl PinyinEngine {
         if !found {
             lines.push(format!("{}c={}", prefix, weight));
         }
-        let _ = fs::write(path, lines.join("\n") + "\n");
+        let tmp_path = path.with_extension("txt.tmp");
+        if fs::write(&tmp_path, lines.join("\n") + "\n").is_ok() {
+            let _ = fs::rename(&tmp_path, path);
+        }
     }
 
     fn find_seg_count_for_word(&self, word: &str, remaining: &[String]) -> usize {
@@ -594,6 +597,7 @@ impl PinyinEngine {
 
         for part in input.split('\'') {
             if part.is_empty() {
+                offset += 1;
                 continue;
             }
             let part_start = offset;
@@ -699,12 +703,12 @@ const PINYIN_SYLLABLES: &[&str] = &[
     "e", "ei", "en", "eng", "er",
     "fa", "fan", "fang", "fei", "fen", "feng", "fiao", "fo", "fou", "fu",
     "ga", "gai", "gan", "gang", "gao", "ge", "gei", "gen", "geng", "gong", "gou", "gu", "gua", "guai", "guan", "guang", "gui", "gun", "guo",
-    "ha", "hai", "han", "hang", "hao", "he", "hei", "hen", "heng", "hong", "hou", "hu", "hua", "huai", "huan", "huang", "hui", "hun", "huo",
+    "ha", "hai", "han", "hang", "hao", "he", "hei", "hen", "heng", "hm", "hng", "hong", "hou", "hu", "hua", "huai", "huan", "huang", "hui", "hun", "huo",
     "ji", "jia", "jian", "jiang", "jiao", "jie", "jin", "jing", "jiong", "jiu", "ju", "juan", "jue", "jun",
     "ka", "kai", "kan", "kang", "kao", "ke", "kei", "ken", "keng", "kong", "kou", "ku", "kua", "kuai", "kuan", "kuang", "kui", "kun", "kuo",
     "la", "lai", "lan", "lang", "lao", "le", "lei", "leng", "li", "lia", "lian", "liang", "liao", "lie", "lin", "ling", "liu", "lo", "long", "lou", "lu", "luan", "lun", "luo", "lv", "lve",
-    "ma", "mai", "man", "mang", "mao", "me", "mei", "men", "meng", "mi", "mian", "miao", "mie", "min", "ming", "miu", "mo", "mou", "mu",
-    "na", "nai", "nan", "nang", "nao", "ne", "nei", "nen", "neng", "ni", "nian", "niang", "niao", "nie", "nin", "ning", "niu", "nong", "nou", "nu", "nuan", "nuo", "nv", "nve",
+    "m", "ma", "mai", "man", "mang", "mao", "me", "mei", "men", "meng", "mi", "mian", "miao", "mie", "min", "ming", "miu", "mo", "mou", "mu",
+    "n", "na", "nai", "nan", "nang", "nao", "ne", "nei", "nen", "neng", "ng", "ni", "nian", "niang", "niao", "nie", "nin", "ning", "niu", "nong", "nou", "nu", "nuan", "nuo", "nv", "nve",
     "o", "ou",
     "pa", "pai", "pan", "pang", "pao", "pei", "pen", "peng", "pi", "pian", "piao", "pie", "pin", "ping", "po", "pou", "pu",
     "qi", "qia", "qian", "qiang", "qiao", "qie", "qin", "qing", "qiong", "qiu", "qu", "quan", "que", "qun",
@@ -874,8 +878,27 @@ impl Engine for PinyinEngine {
             ];
         }
 
+        // Apostrophe — pinyin separator (e.g. xi'an)
+        if key.keysym == 0x27 && !self.preedit.is_empty() {
+            self.preedit.push('\'');
+            self.update_segments();
+            self.lookup();
+            let preedit_display = self.compose_preedit();
+            return vec![
+                EngineAction::UpdatePreedit(preedit_display),
+                EngineAction::UpdateCandidates(self.current_page_candidates()),
+            ];
+        }
+
         if self.preedit.is_empty() {
             return vec![EngineAction::Forward];
+        }
+
+        // Punctuation or other keys during composition: commit preedit first, then forward
+        if key.unicode.is_some() {
+            let mut actions = self.select_candidate(0);
+            actions.push(EngineAction::Forward);
+            return actions;
         }
 
         vec![EngineAction::Noop]
