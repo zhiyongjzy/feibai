@@ -350,7 +350,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
                     if let (Some(vk), Some(_)) = (&state.virtual_keyboard, &state.vk_keymap_fd) {
                         vk.key(time, key, raw_state);
                     } else {
-                        log_debug!("key forward dropped: no virtual keyboard");
+                        log_error!("key forward dropped: no virtual keyboard");
                     }
                     return;
                 }
@@ -418,20 +418,22 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
 
                 let actions = state.engine.process_key(&key_event);
 
-                let should_forward = actions.iter().any(|a| matches!(a, EngineAction::Forward));
-
-                if should_forward {
+                let has_forward = actions.iter().any(|a| matches!(a, EngineAction::Forward));
+                let non_forward: Vec<_> = actions.into_iter()
+                    .filter(|a| !matches!(a, EngineAction::Forward)).collect();
+                if !non_forward.is_empty() {
+                    let qh = qh.clone();
+                    state.handle_engine_actions(non_forward, &qh);
+                }
+                if has_forward {
                     if let (Some(vk), Some(_)) = (&state.virtual_keyboard, &state.vk_keymap_fd) {
                         vk.key(time, key, raw_state);
                         if pressed {
                             state.forwarded_keys.insert(key);
                         }
                     } else {
-                        log_debug!("key forward dropped: no virtual keyboard");
+                        log_error!("key forward dropped: no virtual keyboard");
                     }
-                } else {
-                    let qh = qh.clone();
-                    state.handle_engine_actions(actions, &qh);
                 }
             }
             zwp_input_method_keyboard_grab_v2::Event::Modifiers {

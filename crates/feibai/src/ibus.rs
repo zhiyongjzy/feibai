@@ -90,17 +90,18 @@ impl FeibaiEngine {
         let actions = engine.process_key(&key_event);
 
         let mut consumed = false;
-        for action in actions {
+        let mut has_forward = false;
+        for action in &actions {
             match action {
                 EngineAction::Commit(text) => {
-                    let v = ibus_text(&text);
+                    let v = ibus_text(text);
                     Self::commit_text(&emitter, v.try_into().unwrap()).await.ok();
                     Self::hide_preedit_text(&emitter).await.ok();
                     Self::hide_lookup_table(&emitter).await.ok();
                     consumed = true;
                 }
                 EngineAction::UpdatePreedit(text) => {
-                    let v = ibus_text(&text);
+                    let v = ibus_text(text);
                     let cursor = text.len() as u32;
                     Self::update_preedit_text(
                         &emitter,
@@ -117,18 +118,23 @@ impl FeibaiEngine {
                     if candidates.is_empty() {
                         Self::hide_lookup_table(&emitter).await.ok();
                     } else {
-                        let v = ibus_lookup_table(&candidates);
+                        let v = ibus_lookup_table(candidates);
                         Self::update_lookup_table(&emitter, v.try_into().unwrap(), true)
                             .await
                             .ok();
                     }
                     consumed = true;
                 }
-                EngineAction::Forward => {}
+                EngineAction::Forward => {
+                    has_forward = true;
+                }
                 EngineAction::Noop => {
                     consumed = true;
                 }
             }
+        }
+        if has_forward {
+            consumed = false;
         }
 
         Ok(consumed)
