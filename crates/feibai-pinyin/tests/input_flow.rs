@@ -279,3 +279,18 @@ fn flow_non_alpha_in_chinese_mode_forwards() {
     });
     assert!(actions.iter().any(|a| matches!(a, EngineAction::Forward)));
 }
+
+
+#[test]
+fn flow_punctuation_commits_preedit_then_forwards() {
+    let mut engine = make_engine();
+    // Type "ni" to get candidates
+    press(&mut engine, 'n');
+    press(&mut engine, 'i');
+    // Now press comma — should commit first candidate AND forward the punctuation
+    let actions = press(&mut engine, ',');
+    let has_commit = actions.iter().any(|a| matches!(a, EngineAction::Commit(_)));
+    let has_forward = actions.iter().any(|a| matches!(a, EngineAction::Forward));
+    assert!(has_commit, "expected Commit action for preedit, got: {:?}", actions);
+    assert!(has_forward, "expected Forward action for punctuation, got: {:?}", actions);
+}
