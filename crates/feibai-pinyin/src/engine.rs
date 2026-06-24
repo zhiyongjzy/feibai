@@ -476,8 +476,11 @@ impl PinyinEngine {
             let mut changed = false;
             let mut persist_weight = 0u64;
             if let Some(entries) = self.table.get_mut(&key) {
+                // Consider ALL other words (incl. base dict) as the blocker to overtake;
+                // otherwise a base-dict word (e.g. 有 blocking 又) never gets overtaken
+                // and the strategy degrades to +1.
                 let top_other = entries.iter()
-                    .filter(|e| e.user && e.word != sentence)
+                    .filter(|e| e.word != sentence)
                     .map(|e| e.weight)
                     .max();
                 if let Some(entry) = entries.iter_mut().find(|e| e.word == sentence) {
@@ -518,11 +521,29 @@ impl PinyinEngine {
         let pinyin_spaced = pinyin_segs.join(" ");
         let base_weight: u64 = 1_000_000;
 
-        // Add/boost in memory
+        // Add/boost in memory — same 2-selection promotion as single chars:
+        // 1st select jumps to (top-1), 2nd select overtakes top. top_other includes
+        // base-dict words so a low-weight user word can actually climb past them.
         let new_weight;
         if let Some(entries) = self.table.get_mut(&key) {
+            let top_other = entries.iter()
+                .filter(|e| e.word != sentence)
+                .map(|e| e.weight)
+                .max();
             if let Some(entry) = entries.iter_mut().find(|e| e.word == sentence) {
-                entry.weight = entry.weight.saturating_add(1).min(MAX_USER_WEIGHT);
+                match top_other {
+                    Some(top) if entry.weight < top => {
+                        if entry.weight < top.saturating_sub(1) {
+                            entry.weight = top.saturating_sub(1);
+                        } else {
+                            entry.weight = top.saturating_add(1);
+                        }
+                    }
+                    _ => {
+                        entry.weight = entry.weight.saturating_add(1);
+                    }
+                }
+                entry.weight = entry.weight.min(MAX_USER_WEIGHT);
                 entry.user = true;
                 new_weight = entry.weight;
             } else {
@@ -1206,6 +1227,36 @@ mod tests {
             actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "今天")),
             "expected commit '今天', got: {:?}", actions
         );
+    }
+
+    #[test]
+    fn learn_promotion_overtakes_base_single_char() {
+        // 又 (you) is blocked by base-dict 有/由; selecting it twice should overtake.
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        for _ in 0..2 {
+            for c in "you".chars() { press_key(&mut engine, c); }
+            let idx = engine.candidates.iter().position(|c| c.text == "又")
+                .expect("又 should be a candidate for 'you'");
+            assert!(idx < 9, "又 should be in first page, got idx {}", idx);
+            press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        }
+        for c in "you".chars() { press_key(&mut engine, c); }
+        assert_eq!(engine.candidates[0].text, "又", "又 should rank #1 after 2 selections");
+    }
+
+    #[test]
+    fn learn_promotion_overtakes_base_multichar() {
+        // 复现 (fu xian) is blocked by base-dict 复线/浮现; selecting it twice should overtake.
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        for _ in 0..2 {
+            for c in "fuxian".chars() { press_key(&mut engine, c); }
+            let idx = engine.candidates.iter().position(|c| c.text == "复现")
+                .expect("复现 should be a candidate for 'fuxian'");
+            assert!(idx < 9, "复现 should be in first page, got idx {}", idx);
+            press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        }
+        for c in "fuxian".chars() { press_key(&mut engine, c); }
+        assert_eq!(engine.candidates[0].text, "复现", "复现 should rank #1 after 2 selections");
     }
 
     #[test]
