@@ -60,6 +60,15 @@ echo "[feibai] Installing binary to $INSTALL_BIN/"
 mkdir -p "$INSTALL_BIN"
 cp "$BINARY" "$INSTALL_BIN/feibai"
 
+# Verify binary actually runs — catches glibc-too-old on older distros
+if ldd "$INSTALL_BIN/feibai" 2>&1 | grep -q "not found"; then
+    echo "[feibai] Error: binary has unresolved library dependencies (likely glibc too old)."
+    ldd "$INSTALL_BIN/feibai" 2>&1 | grep "not found"
+    echo "  Your glibc: $(ldd --version | head -1)"
+    echo "  Reinstall from source: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | bash -s -- --from-source"
+    exit 1
+fi
+
 # --- Install dicts ---
 
 echo "[feibai] Installing dicts to $FEIBAI_DIR/"
@@ -113,19 +122,45 @@ if [ ! -f "$IBUS_XML_SOURCE" ]; then
 fi
 
 IBUS_COMPONENT_DIR="/usr/share/ibus/component"
+COMPONENT_INSTALLED=0
 if [ -d "$IBUS_COMPONENT_DIR" ]; then
-    echo "[feibai] Installing IBus component..."
-    sed "s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|" "$IBUS_XML_SOURCE" | sudo tee "$IBUS_COMPONENT_DIR/feibai.xml" > /dev/null
-    if command -v ibus &>/dev/null; then
-        ibus write-cache 2>/dev/null || true
-        ibus restart 2>/dev/null || true
+    echo "[feibai] Installing IBus component (needs sudo)..."
+    if sed "s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|" "$IBUS_XML_SOURCE" | sudo tee "$IBUS_COMPONENT_DIR/feibai.xml" > /dev/null 2>&1; then
+        COMPONENT_INSTALLED=1
+    else
+        echo "[feibai] Warning: sudo failed or denied. Install the component manually:"
+        echo "  sed \"s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|\" \"$IBUS_XML_SOURCE\" | sudo tee \"$IBUS_COMPONENT_DIR/feibai.xml\""
     fi
 else
     mkdir -p "$HOME/.local/share/ibus/component"
     sed "s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|" "$IBUS_XML_SOURCE" > "$HOME/.local/share/ibus/component/feibai.xml"
-    if command -v ibus &>/dev/null; then
-        ibus write-cache 2>/dev/null || true
-        ibus restart 2>/dev/null || true
+    COMPONENT_INSTALLED=1
+    echo "[feibai] Note: installed IBus component to ~/.local/share/ibus/component/"
+    echo "  If GNOME doesn't list Feibai, install to /usr/share with sudo instead."
+fi
+
+if [ "$COMPONENT_INSTALLED" = 1 ] && command -v ibus &>/dev/null; then
+    ibus write-cache 2>/dev/null || true
+    ibus restart 2>/dev/null || true
+fi
+
+# --- Auto-add input source on GNOME ---
+
+GNOME_ADDED=0
+if echo "${XDG_CURRENT_DESKTOP:-}" | grep -qi gnome && command -v gsettings >/dev/null 2>&1; then
+    cur=$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)
+    if [ -n "$cur" ] && ! echo "$cur" | grep -q "'feibai'"; then
+        if echo "$cur" | grep -qE '\[\s*\]'; then
+            new=$(echo "$cur" | sed -E "s/\[\s*\]/[('ibus','feibai')]/")
+        else
+            new=$(echo "$cur" | sed -E "s/\]$/, ('ibus','feibai')]/")
+        fi
+        if [ -n "$new" ] && gsettings set org.gnome.desktop.input-sources sources "$new" 2>/dev/null; then
+            GNOME_ADDED=1
+            echo "[feibai] Added 'Feibai Pinyin' to GNOME input sources automatically."
+        fi
+    elif echo "$cur" | grep -q "'feibai'"; then
+        GNOME_ADDED=1
     fi
 fi
 
@@ -138,7 +173,11 @@ echo "Next steps:"
 if [ "$XDG_SESSION_TYPE" = "wayland" ] || [ -n "$WAYLAND_DISPLAY" ]; then
     echo "  Sway/Hyprland/COSMIC: exec feibai (in your compositor config)"
 fi
-echo "  GNOME/KDE: Settings > Keyboard > Input Sources > Add > Chinese > Feibai Pinyin"
+if [ "$GNOME_ADDED" = 1 ]; then
+    echo "  GNOME: Feibai Pinyin already in input sources — switch to it (Super+Space) and type."
+else
+    echo "  GNOME/KDE: Settings > Keyboard > Input Sources > + > Chinese > Feibai Pinyin"
+fi
 echo ""
 echo "Config: $FEIBAI_DIR/config.toml"
 echo "Dicts:  $FEIBAI_DIR/*.dict.yaml"

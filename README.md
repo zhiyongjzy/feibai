@@ -44,11 +44,14 @@ target/release/feibai
 
 ### 快速安装（推荐）
 
-无需 Rust 环境，自动下载预编译二进制：
+无需 Rust 环境，自动下载预编译二进制。脚本会装二进制、词库、IBus 组件，并在 GNOME 上自动添加输入源：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zhiyongjzy/feibai/main/install.sh | bash
 ```
+
+> - 安装 IBus 组件需要 sudo 密码；若 sudo 失败，脚本会打印手动安装命令。
+> - 预编译二进制要求 glibc ≥ 2.39（Ubuntu 24.04+）。旧系统报 `GLIBC_2.xx not found` 时改用 `--from-source` 本机编译。
 
 ### 从源码构建
 
@@ -69,6 +72,7 @@ cd feibai
 
 - `libxkbcommon0`（Ubuntu/Debian 桌面环境默认已安装）
 - IBus（GNOME 默认已安装）
+- glibc ≥ 2.39（预编译二进制；旧系统用 `--from-source` 本机编译）
 
 ## 使用
 
@@ -86,7 +90,7 @@ exec feibai
 
 ### GNOME / KDE
 
-安装后在「设置 → 键盘 → 输入源」中添加 **Feibai Pinyin**。
+安装脚本会自动把 Feibai Pinyin 加入 GNOME 输入源，装完用 Super+Space 切换即可。若未自动添加，手动到「设置 → 键盘 → 输入源 → + → 中文 → Feibai Pinyin」。
 
 ### 快捷键
 
