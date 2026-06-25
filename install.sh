@@ -119,6 +119,21 @@ if [ ! -f "$ICON_SOURCE" ]; then
         wget -q "$ICON_URL" -O "$ICON_SOURCE"
     fi
 fi
+ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
+mkdir -p "$ICON_DIR"
+cp "$ICON_SOURCE" "$ICON_DIR/feibai.svg"
+echo "[feibai] Installed icon to $ICON_DIR/feibai.svg"
+
+ICON_SOURCE="data/feibai.svg"
+if [ ! -f "$ICON_SOURCE" ]; then
+    ICON_SOURCE="/tmp/feibai.svg"
+    ICON_URL="https://github.com/$REPO/releases/latest/download/feibai.svg"
+    if command -v curl &>/dev/null; then
+        curl -fSL "$ICON_URL" -o "$ICON_SOURCE"
+    else
+        wget -q "$ICON_URL" -O "$ICON_SOURCE"
+    fi
+fi
 ICON_DIR="/usr/share/feibai"
 if sudo mkdir -p "$ICON_DIR" 2>/dev/null && sudo cp "$ICON_SOURCE" "$ICON_DIR/feibai.svg" 2>/dev/null; then
     echo "[feibai] Installed icon to $ICON_DIR/feibai.svg"
