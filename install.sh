@@ -161,15 +161,15 @@ IBUS_COMPONENT_DIR="/usr/share/ibus/component"
 COMPONENT_INSTALLED=0
 if [ -d "$IBUS_COMPONENT_DIR" ]; then
     echo "[feibai] Installing IBus component (needs sudo)..."
-    if sed "s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|" "$IBUS_XML_SOURCE" | sudo tee "$IBUS_COMPONENT_DIR/feibai.xml" > /dev/null 2>&1; then
+    if sed "s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|;s|<icon>.*</icon>|<icon>$HOME/.local/share/icons/hicolor/scalable/apps/feibai.svg</icon>|" "$IBUS_XML_SOURCE" | sudo tee "$IBUS_COMPONENT_DIR/feibai.xml" > /dev/null 2>&1; then
         COMPONENT_INSTALLED=1
     else
         echo "[feibai] Warning: sudo failed or denied. Install the component manually:"
-        echo "  sed \"s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|\" \"$IBUS_XML_SOURCE\" | sudo tee \"$IBUS_COMPONENT_DIR/feibai.xml\""
+        echo "  sed \"s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|;s|<icon>.*</icon>|<icon>$HOME/.local/share/icons/hicolor/scalable/apps/feibai.svg</icon>|\" \"$IBUS_XML_SOURCE\" | sudo tee \"$IBUS_COMPONENT_DIR/feibai.xml\""
     fi
 else
     mkdir -p "$HOME/.local/share/ibus/component"
-    sed "s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|" "$IBUS_XML_SOURCE" > "$HOME/.local/share/ibus/component/feibai.xml"
+    sed "s|<exec>.*</exec>|<exec>$FEIBAI_BIN --ibus</exec>|;s|<icon>.*</icon>|<icon>$HOME/.local/share/icons/hicolor/scalable/apps/feibai.svg</icon>|" "$IBUS_XML_SOURCE" > "$HOME/.local/share/ibus/component/feibai.xml"
     COMPONENT_INSTALLED=1
     echo "[feibai] Note: installed IBus component to ~/.local/share/ibus/component/"
     echo "  If GNOME doesn't list Feibai, install to /usr/share with sudo instead."
