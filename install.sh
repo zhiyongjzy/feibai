@@ -88,13 +88,46 @@ if [ ! -d "$DICT_SOURCE" ]; then
     done
 fi
 
+merge_dict() {
+    local src="$1" dst="$2"
+    local new_entries
+    new_entries=$(awk -F'\t' '
+        # Skip YAML header (between --- and ...)
+        /^---$/ { hdr=1; next }
+        /^\.\.\.$/ { hdr=0; next }
+        hdr { next }
+        # Skip empty lines and comments
+        /^$/ || /^#/ { next }
+
+        # First file (local/dst): record existing keys
+        NR==FNR { seen[$1 FS $2]=1; next }
+
+        # Second file (src): output lines whose key is not in local
+        !seen[$1 FS $2] { print }
+    ' "$dst" "$src")
+
+    if [ -n "$new_entries" ]; then
+        local count
+        count=$(echo "$new_entries" | wc -l)
+        echo "$new_entries" >> "$dst"
+        echo "$count"
+    else
+        echo "0"
+    fi
+}
+
 for dict in "$DICT_SOURCE"/*.dict.yaml; do
     name="$(basename "$dict")"
     if [ "$FORCE" = 1 ] || [ ! -f "$FEIBAI_DIR/$name" ]; then
         cp "$dict" "$FEIBAI_DIR/"
         echo "  installed $name"
     else
-        echo "  $name exists (use --force-dicts to overwrite)"
+        added=$(merge_dict "$dict" "$FEIBAI_DIR/$name")
+        if [ "$added" -gt 0 ]; then
+            echo "  $name: merged $added new entries"
+        else
+            echo "  $name: already up to date"
+        fi
     fi
 done
 
