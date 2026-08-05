@@ -511,12 +511,11 @@ impl PinyinEngine {
             return;
         }
 
-        // Multi-char: skip if it's a base dict word (weight 1000~999999)
-        if let Some(entries) = self.table.get(&key) {
-            if entries.iter().any(|e| e.word == sentence && e.weight >= 1000 && e.weight < 1_000_000) {
-                return;
-            }
-        }
+        // NOTE: base-dict words are intentionally NOT skipped here. A user selecting a
+        // 2nd-place candidate (e.g. 书局 over 数据) wants it promoted; the promotion
+        // below handles overtaking the top. A weight-based skip (the old `>=1000` band)
+        // was self-defeating: the 1st select promotes the word into that band, then the
+        // 2nd select gets blocked by the same rule and never overtakes.
 
         let pinyin_spaced = pinyin_segs.join(" ");
         let base_weight: u64 = 1_000_000;
