@@ -124,6 +124,28 @@ theme = "dark"   # light/dark/flat/blue/sakura/ocean/lavender/tangerine/mint
 
 词库格式兼容 Rime YAML dict 格式。详见 [data/dicts/SOURCES.md](data/dicts/SOURCES.md)。
 
+### 同步用户词库到仓库
+
+`user.dict.txt` 里积累的用户新词（本地自动学习）可以同步回仓库的 `feibai.extra.dict.yaml`，方便提交到 Git 分享给其他用户：
+
+```bash
+./tools/sync_user_dict.sh
+```
+
+特性：
+
+- **只同步新词** — 只同步 `word` 不在任何仓库词典（base/tech/extra）中的词，base/tech 已覆盖的词靠本地 `user.dict.txt` 学习，不重复入库
+- **通用性过滤** — 自动过滤含字母/数字杂质（如 `手doong`）和明显的人名/称呼模式（如 `X总`、`X老师`、`阿X`），被过滤的词保留在本地不影响个人使用
+- **权重映射** — 用户词的 `c=1000000+n` 映射到 extra 词库 `[10000, 49000]` 区间，保留相对排序，不挤掉内置高频词
+- **幂等** — 重复运行不会重复添加
+- **保留原词条顺序** — 只追加新词到文件末尾，不重排已有词条，git diff 清晰可审查
+
+可用环境变量 `FEIBAI_USER_DICT` 覆盖用户词库路径：
+
+```bash
+FEIBAI_USER_DICT=/path/to/user.dict.txt ./tools/sync_user_dict.sh
+```
+
 ## 日志与调试
 
 日志文件位于 `~/.local/state/feibai/feibai.log`，自动轮转（>10MB 时重命名为 `.log.old`）。
