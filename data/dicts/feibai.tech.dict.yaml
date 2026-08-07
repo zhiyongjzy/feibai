@@ -342,3 +342,33 @@ columns:
 使能	shi neng	300
 下电	xia dian	200
 劳特巴赫	lao te ba he	300
+
+# 从用户词库淘词入库 2026-08-07
+时间点	shi jian dian	8000
+时间节点	shi jian jie dian	8000
+时间线	shi jian xian	8000
+时序图	shi xu tu	8000
+回显	hui xian	8000
+粘包	zhan bao	8000
+正常启动	zheng chang qi dong	8000
+调试口	tiao shi kou	5000
+启动阶段	qi dong jie duan	5000
+模型量化	mo xing liang hua	5000
+资源不够	zi yuan bu gou	5000
+提交完成	ti jiao wan cheng	5000
+下格版本	xia ge ban ben	5000
+新板子	xin ban zi	5000
+进板子	jin ban zi	5000
+刷板子	shua ban zi	5000
+刷成功	shua cheng gong	5000
+刷不了	shua bu liao	5000
+刷屏幕	shua ping mu	5000
+巡检到	xun jian dao	5000
+被监控	bei jian kong	5000
+没日志	mei ri zhi	5000
+不启动	bu qi dong	5000
+不提交	bu ti jiao	5000
+不巡检	bu xun jian	5000
+换命令	huan ming ling	5000
+模块名	mo kuai ming	5000
+拉特巴赫	la te ba he	5000
