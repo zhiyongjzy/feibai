@@ -3023,3 +3023,144 @@ emo	e m o	5000
 已出现	yi chu xian	10000
 每帧	mei zhen	10000
 嗯嗯	en en	10000
+# 从用户词库淘词入库 2026-08-07
+下一个	xia yi ge	12000
+多少个	duo shao ge	12000
+每个人	mei ge ren	12000
+两个人	liang ge ren	12000
+又一个	you yi ge	12000
+换一个	huan yi ge	12000
+加一个	jia yi ge	12000
+什么时候	shen me shi hou	12000
+好几个月	hao ji ge yue	8000
+半个小时	ban ge xiao shi	8000
+有关系	you guan xi	8000
+不关心	bu guan xin	8000
+不方便	bu fang bian	8000
+不合适	bu he shi	8000
+不简单	bu jian dan	8000
+不喜欢	bu xi huan	8000
+不安全	bu an quan	8000
+不完善	bu wan shan	8000
+不太理解	bu tai li jie	8000
+说清楚	shuo qing chu	8000
+想清楚	xiang qing chu	8000
+写清楚	xie qing chu	8000
+准备好了	zhun bei hao	8000
+怎么改	zen me gai	8000
+关键信息	guan jian xin xi	8000
+好问题	hao wen ti	8000
+居家办公	ju jia ban gong	8000
+多核	duo he	8000
+高亮	gao liang	8000
+开完会	kai wan hui	8000
+到公司	dao gong si	8000
+点一下	dian yi xia	8000
+请记住	qing ji zhu	8000
+先确认	xian que ren	8000
+先确定	xian que ding	8000
+先给我	xian gei wo	8000
+这一次	zhe yi ci	8000
+下一次	xia yi ci	8000
+还记得	hai ji de	8000
+那么多	na me duo	8000
+不改	bu gai	8000
+不小心	bu xiao xin	8000
+这不是	zhe bu shi	8000
+准备好	zhun bei hao	8000
+一两个人	yi liang ge ren	5000
+做一份	zuo yi fen	5000
+做一次	zuo yi ci	5000
+加一次	jia yi ci	5000
+改清楚	gai qing chu	5000
+清晰点	qing xi dian	5000
+不清晰	bu qing xi	5000
+猜错了	cai cuo le	5000
+填错了	tian cuo le	5000
+给错了	gei cuo le	5000
+等不到	deng bu dao	5000
+见不到	jian bu dao	5000
+刚开始	gang kai shi	5000
+最后面	zui hou mian	5000
+最上面	zui shang mian	5000
+不可逆	bu ke ni	5000
+不相关	bu xiang guan	5000
+特殊意义	te shu yi yi	5000
+实际代码	shi ji dai ma	5000
+最佳实现	zui jia shi xian	5000
+烂大街	lan da jie	5000
+造轮子	zao lun zi	5000
+甩锅	shuai guo	5000
+讲得通	jiang de tong	5000
+不长记性	bu zhang ji xing	5000
+好说话	hao shuo hua	5000
+总不至于	zong bu zhi yu	5000
+打不过交道	da guo jiao dao	5000
+打过交道	da guo jiao dao	5000
+胃肠镜	wei chang jing	5000
+舒适区	shu shi qu	5000
+聊天纪律	liao tian ji lv	5000
+加评论	jia ping lun	5000
+点外卖	dian wai mai	5000
+确认西	que ren xi	5000
+叫我们	jiao wo men	5000
+做我们	zuo wo men	5000
+不管你	bu guan ni	5000
+那你说	na ni shuo	5000
+那给你	na gei ni	5000
+那过来	na guo lai	5000
+那下来	na xia lai	5000
+拿下来	na xia lai	5000
+发过去	fa guo qu	5000
+发生过	fa sheng guo	5000
+报出来	bao chu lai	5000
+连起来	lian qi lai	5000
+定位到	ding wei dao	5000
+换进去	huan jin qu	5000
+做这些	zuo zhe xie	5000
+这两种	zhe liang zhong	5000
+某一次	mou yi ci	5000
+某一台	mou yi tai	5000
+某个点	mou ge dian	5000
+每个组	mei ge zu	5000
+每一行	mei yi hang	5000
+第六行	di liu hang	5000
+一小段	yi xiao duan	5000
+加一句	jia yi ju	5000
+跑晚了	pao wan le	5000
+早点走	zao dian zou	5000
+我有点	wo you dian	5000
+我猜测	wo cai ce	5000
+原来那	yuan lai na	5000
+还觉得	hai jue de	5000
+还不知道	hai bu zhi dao	5000
+更不知道	geng bu zhi dao	5000
+还没用起来	hai mei yong qi lai	5000
+那么多人	na me duo ren	5000
+差一点点	cha yi dian dian	5000
+有点快	you dian kuai	5000
+有点卡	you dian ka	5000
+有点大	you dian da	5000
+有点丑	you dian chou	5000
+有点事情	you dian shi qing	5000
+复杂点	fu za dian	5000
+特殊点	te shu dian	5000
+好看点	hao kan dian	5000
+想看看	xiang kan kan	5000
+改什么	gai shen me	5000
+改之前	gai zhi qian	5000
+不处理	bu chu li	5000
+不发送	bu fa song	5000
+不维护	bu wei hu	5000
+不采购	bu cai gou	5000
+不便宜	bu pian yi	5000
+不推进	bu tui jin	5000
+不反驳	bu fan bo	5000
+不出发	bu chu fa	5000
+不惯着	bu guan zhe	5000
+不管这	bu guan zhe	5000
+这就让	zhe jiu rang	5000
+这工作	zhe gong zuo	5000
+这的确	zhe di que	5000
+既可以	ji ke yi	5000
+才可以	cai ke yi	5000
