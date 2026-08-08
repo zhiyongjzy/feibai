@@ -12,6 +12,11 @@ struct DictEntry {
 
 const PAGE_SIZE: usize = 9;
 const MAX_USER_WEIGHT: u64 = 10_000_000;
+/// Initial weight for brand-new words not present in any dictionary.
+/// Kept low so mislearned fragments (yo+n → 哟嗯) sink to the bottom of
+/// candidates instead of suppressing real base-dict words. A genuinely wanted
+/// new word still reaches #1 via the 2-selection promotion (top_other±1).
+const NEW_WORD_WEIGHT: u64 = 10;
 
 pub struct PinyinEngine {
     table: BTreeMap<String, Vec<DictEntry>>,
@@ -198,13 +203,17 @@ impl PinyinEngine {
 
     fn sort_entries(&mut self) {
         for entries in self.table.values_mut() {
-            entries.sort_by(|a, b| Self::cmp_entry(b, a));
+            entries.sort_by(|a, b| Self::cmp_entry(a, b));
         }
     }
 
+    /// Descending comparator: higher weight first, then user words, then longer
+    /// words, then lexicographic ascending (stable deterministic fallback).
     fn cmp_entry(a: &DictEntry, b: &DictEntry) -> std::cmp::Ordering {
-        // Sort purely by weight — user words earn their rank through selection frequency
-        a.weight.cmp(&b.weight)
+        b.weight.cmp(&a.weight)
+            .then_with(|| b.user.cmp(&a.user))
+            .then_with(|| b.word.chars().count().cmp(&a.word.chars().count()))
+            .then_with(|| b.word.cmp(&a.word))
     }
 
     fn update_segments(&mut self) {
@@ -501,7 +510,7 @@ impl PinyinEngine {
                     changed = entry.weight != old_weight || !entry.user;
                     entry.user = true;
                     persist_weight = entry.weight;
-                    entries.sort_by(|a, b| Self::cmp_entry(b, a));
+                    entries.sort_by(|a, b| Self::cmp_entry(a, b));
                 }
             }
             if changed {
@@ -518,7 +527,6 @@ impl PinyinEngine {
         // 2nd select gets blocked by the same rule and never overtakes.
 
         let pinyin_spaced = pinyin_segs.join(" ");
-        let base_weight: u64 = 1_000_000;
 
         // Add/boost in memory — same 2-selection promotion as single chars:
         // 1st select jumps to (top-1), 2nd select overtakes top. top_other includes
@@ -546,12 +554,12 @@ impl PinyinEngine {
                 entry.user = true;
                 new_weight = entry.weight;
             } else {
-                new_weight = base_weight;
+                new_weight = NEW_WORD_WEIGHT;
                 entries.push(DictEntry { word: sentence.to_string(), weight: new_weight, user: true });
             }
-            entries.sort_by(|a, b| Self::cmp_entry(b, a));
+            entries.sort_by(|a, b| Self::cmp_entry(a, b));
         } else {
-            new_weight = base_weight;
+            new_weight = NEW_WORD_WEIGHT;
             self.table.insert(key, vec![DictEntry { word: sentence.to_string(), weight: new_weight, user: true }]);
         }
 
@@ -1286,5 +1294,113 @@ mod tests {
             actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "你好")),
             "expected commit '你好', got: {:?}", actions
         );
+    }
+
+    #[test]
+    fn test_mislearn_fragment_gets_low_weight() {
+        // A multi-char word not present in any dictionary (a mislearn fragment like
+        // 哟嗯 from yo+n segmentation) must land at NEW_WORD_WEIGHT, NOT the old
+        // 1_000_000, so it cannot suppress real base-dict words.
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        let segs: Vec<String> = vec!["yo".into(), "n".into()];
+        engine.learn_from_commit("哟嗯", &segs);
+        let key: String = segs.concat();
+        let entries = engine.table.get(&key).expect("fragment should be stored");
+        let entry = entries.iter().find(|e| e.word == "哟嗯")
+            .expect("哟嗯 entry should exist");
+        assert_eq!(entry.weight, NEW_WORD_WEIGHT,
+            "mislearned fragment must land at NEW_WORD_WEIGHT (10), got {}", entry.weight);
+        assert!(entry.user, "learned fragment must be flagged user");
+    }
+
+    #[test]
+    fn test_new_real_word_promotes_via_selections() {
+        // A genuinely new multi-char word (not in dict) lands at NEW_WORD_WEIGHT,
+        // then climbs via the promotion path: 1st select → NEW_WORD_WEIGHT (new entry),
+        // 2nd select → top_other-1 (just below #1), 3rd select → top_other+1 (overtake).
+        // This proves P0-1 does not block learning legitimate new words — it just
+        // takes one extra selection vs. a word that already exists in the dict.
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        let segs: Vec<String> = vec!["ce".into(), "shi".into()];
+        let key: String = segs.concat();
+        // "测释" (2 chars, 2 syllables) is absent from the dict — stands in for any
+        // user-coined word. Confirm precondition.
+        assert!(engine.table.get(&key).map_or(true, |e| !e.iter().any(|x| x.word == "测释")),
+            "precondition: word must not exist in dict");
+        let top_other_of = |eng: &PinyinEngine| -> u64 {
+            eng.table.get(&key).unwrap().iter()
+                .filter(|e| e.word != "测释").map(|e| e.weight).max().unwrap_or(0)
+        };
+
+        // 1st select: new entry lands at NEW_WORD_WEIGHT (10).
+        engine.learn_from_commit("测释", &segs);
+        let w1 = engine.table.get(&key).unwrap().iter()
+            .find(|e| e.word == "测释").unwrap().weight;
+        assert_eq!(w1, NEW_WORD_WEIGHT, "1st select must land at NEW_WORD_WEIGHT");
+
+        // 2nd select: jumps to top_other - 1 (just below 测试=2444 → 2443).
+        let before2 = top_other_of(&engine);
+        engine.learn_from_commit("测释", &segs);
+        let w2 = engine.table.get(&key).unwrap().iter()
+            .find(|e| e.word == "测释").unwrap().weight;
+        assert_eq!(w2, before2.saturating_sub(1),
+            "2nd select must climb to top_other-1, got {} (top_other={})", w2, before2);
+
+        // 3rd select: overtakes → top_other + 1 (2445 > 2444).
+        let before3 = top_other_of(&engine);
+        engine.learn_from_commit("测释", &segs);
+        let w3 = engine.table.get(&key).unwrap().iter()
+            .find(|e| e.word == "测释").unwrap().weight;
+        assert!(w3 > before3,
+            "3rd select must overtake the top, got {} vs top_other {}", w3, before3);
+    }
+
+    #[test]
+    fn test_same_weight_tiebreak_stable() {
+        // Two entries under the same key with equal weight must sort deterministically:
+        // user flag first, then longer word, then lexicographic. Sorting twice must
+        // yield identical order (no instability).
+        let mut engine = PinyinEngine::new_empty();
+        let key = "xx".to_string();
+        let mk = |word: &str, weight: u64, user: bool| DictEntry {
+            word: word.to_string(), weight, user,
+        };
+        engine.table.insert(key.clone(), vec![
+            mk("乙", 100, false),       // base, 1 char
+            mk("甲", 100, false),       // base, 1 char — lexicographic before 乙
+            mk("用户词", 100, true),    // user, 2 chars — should rank #1
+            mk("丙", 100, false),       // base, 1 char
+        ]);
+        engine.sort_entries();
+        let order1: Vec<String> = engine.table.get(&key).unwrap().iter()
+            .map(|e| e.word.clone()).collect();
+        // sort again — must be stable
+        engine.sort_entries();
+        let order2: Vec<String> = engine.table.get(&key).unwrap().iter()
+            .map(|e| e.word.clone()).collect();
+        assert_eq!(order1, order2, "sort must be stable across repeated calls");
+        // user word (用户词, 2 chars) must rank ahead of all base 1-char words
+        assert_eq!(order1[0], "用户词",
+            "user word must rank first on weight tie, got {:?}", order1);
+        // remaining base words sorted lexicographically (甲 < 乙 < 丙)
+        assert_eq!(order1[1..], vec!["甲", "乙", "丙"],
+            "base words tie-break must be lexicographic, got {:?}", order1);
+    }
+
+    #[test]
+    fn test_existing_promotion_unaffected_by_changes() {
+        // Regression guard: the existing single-char promotion (又 over 有/由) must
+        // still overtake after 2 selections with the new base_weight/tie-break.
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        for _ in 0..2 {
+            for c in "you".chars() { press_key(&mut engine, c); }
+            let idx = engine.candidates.iter().position(|c| c.text == "又")
+                .expect("又 should be a candidate for 'you'");
+            assert!(idx < 9, "又 should be in first page, got idx {}", idx);
+            press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        }
+        for c in "you".chars() { press_key(&mut engine, c); }
+        assert_eq!(engine.candidates[0].text, "又",
+            "又 should still rank #1 after 2 selections (promotion unaffected)");
     }
 }

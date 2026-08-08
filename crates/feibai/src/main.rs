@@ -567,6 +567,12 @@ fn setup_logging() {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
+    // --version: print version and exit
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("feibai {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // --debug flag or ~/.config/feibai/.debug file enables verbose logging
     if args.iter().any(|a| a == "--debug")
         || std::path::Path::new(&format!(
@@ -579,7 +585,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     setup_logging();
-    log_info!("=== started ===");
+    log_info!("=== started === (feibai {})", env!("CARGO_PKG_VERSION"));
 
     // --ibus flag forces IBus mode (launched by ibus-daemon)
     if args.iter().any(|a| a == "--ibus") {
