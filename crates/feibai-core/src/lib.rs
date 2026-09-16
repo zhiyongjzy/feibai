@@ -75,7 +75,16 @@ pub fn log_timestamp() -> String {
     {
         let mut tm: libc::tm = unsafe { std::mem::zeroed() };
         unsafe { libc::localtime_r(&secs, &mut tm) };
-        format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
+        // Date included: the process runs for weeks, time-only lines can't be
+        // told apart across sessions
+        format!(
+            "{:02}-{:02} {:02}:{:02}:{:02}",
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_sec
+        )
     }
     #[cfg(not(unix))]
     {
@@ -110,4 +119,31 @@ macro_rules! log_debug {
             eprintln!("[feibai {} DBG] {}", $crate::log_timestamp(), format_args!($($arg)*))
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_timestamp_contains_date_and_time() {
+        let ts = log_timestamp();
+        // Expected format: "MM-DD HH:MM:SS" (date needed to tell sessions apart
+        // in a log that spans weeks of uptime)
+        assert_eq!(ts.len(), 14, "expected 'MM-DD HH:MM:SS', got '{ts}'");
+        let b = ts.as_bytes();
+        assert_eq!(b[2], b'-', "date separator at pos 2, got '{ts}'");
+        assert_eq!(b[5], b' ', "date/time separator at pos 5, got '{ts}'");
+        assert_eq!(b[8], b':', "hour separator, got '{ts}'");
+        assert_eq!(b[11], b':', "minute separator, got '{ts}'");
+
+        let month: u32 = ts[0..2].parse().expect("month numeric");
+        let day: u32 = ts[3..5].parse().expect("day numeric");
+        let hour: u32 = ts[6..8].parse().expect("hour numeric");
+        let min: u32 = ts[9..11].parse().expect("minute numeric");
+        let sec: u32 = ts[12..14].parse().expect("second numeric");
+        assert!((1..=12).contains(&month), "month out of range: {month} in '{ts}'");
+        assert!((1..=31).contains(&day), "day out of range: {day} in '{ts}'");
+        assert!(hour < 24 && min < 60 && sec < 60, "time out of range in '{ts}'");
+    }
 }
