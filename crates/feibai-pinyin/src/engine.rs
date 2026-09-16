@@ -24,6 +24,9 @@ pub struct PinyinEngine {
     bigram: UserBigram,
     last_context: Option<String>,
     userdb_dirty: bool,
+    /// userdb 是否成功加载过。加载失败后内存态近乎为空,
+    /// 落盘会整写覆盖真实文件 → 失败即禁写,直至进程重启
+    userdb_persist_ok: bool,
 }
 
 impl PinyinEngine {
@@ -44,6 +47,7 @@ impl PinyinEngine {
             bigram: UserBigram::default(),
             last_context: None,
             userdb_dirty: false,
+            userdb_persist_ok: true,
         }
     }
 
@@ -153,11 +157,18 @@ impl PinyinEngine {
 
     pub fn load_userdb(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
         let path = path.as_ref();
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("failed to read userdb {}: {e}", path.display()))?;
-        let migrated = self.parse_userdb(&content);
-        if migrated > 0 {
-            // 首次迁移前备份原文件(幂等: 已有备份则不覆盖)
+        // 任何加载失败(含 bigram)都必须禁写: 否则近乎空的内存态
+        // 会在下次 save 整写覆盖真实文件
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                self.userdb_persist_ok = false;
+                return Err(format!("failed to read userdb {}: {e}", path.display()));
+            }
+        };
+        let (migrated, dropped) = self.parse_userdb(&content);
+        if migrated > 0 || dropped > 0 {
+            // 首次迁移或破坏性丢弃前备份原文件(幂等: 已有备份则不覆盖)
             let bak = path.with_extension("txt.legacy-bak");
             if !bak.exists() {
                 if let Err(e) = fs::copy(path, &bak) {
@@ -165,21 +176,34 @@ impl PinyinEngine {
                     log_error!("failed to backup userdb {} -> {}: {e}", path.display(), bak.display());
                 }
             }
-            log_info!("userdb: migrated {migrated} legacy entries");
+            if migrated > 0 {
+                log_info!("userdb: migrated {migrated} legacy entries");
+            }
+            if dropped > 0 {
+                log_info!("userdb: dropped {dropped} garbage/corrupted lines (backed up)");
+            }
         }
         // bigram 与 unigram 同目录共存,重启后上下文延续
         let bigram_path = path.with_file_name("user.bigram.txt");
-        self.bigram = UserBigram::load(&bigram_path)
-            .map_err(|e| format!("failed to load user bigram: {e}"))?;
+        match UserBigram::load(&bigram_path) {
+            Ok(b) => self.bigram = b,
+            Err(e) => {
+                self.userdb_persist_ok = false;
+                return Err(format!("failed to load user bigram: {e}"));
+            }
+        }
         Ok(())
     }
 
-    /// 解析用户词典。返回迁移的旧格式行数(供备份决策)。
+    /// 解析用户词典。返回 (迁移的旧格式行数, 破坏性丢弃的行数) ——
+    /// 任一 > 0 都触发加载前备份(纯垃圾/纯损坏文件同样有备份再丢弃)。
+    /// dropped 只计 c≥1M 垃圾行与损坏 t= 跳过行;纯新格式缺 c= 的静默跳过不计。
     /// 新格式: `拼音\t词\tc=次数 t=周`(拼音为连写形式,与 table key 一致)
     /// 旧格式: `拼音 空格分隔\t词\tc=绝对权重`(无 t= 字段,按 band 位置换算次数)
-    fn parse_userdb(&mut self, content: &str) -> usize {
+    fn parse_userdb(&mut self, content: &str) -> (usize, usize) {
         let now = now_week();
         let mut migrated = 0;
+        let mut dropped = 0;
         for line in content.lines() {
             if line.starts_with('#') || line.trim().is_empty() {
                 continue;
@@ -209,23 +233,28 @@ impl PinyinEngine {
             if has_t && week.is_none() {
                 // 损坏行: 跳过,防止误入 legacy 迁移分支收缩计数
                 log_error!("userdb: corrupted line (unparseable t=), skipped: {line}");
+                dropped += 1;
                 continue;
             }
             let key: String = pinyin_raw.split_whitespace().collect();
 
             let entries = self.table.entry(key).or_default();
-            let in_base = entries.iter().any(|e| e.word == word && e.selection_count == 0 && e.base_weight > 0);
             let (count, last_week) = match week {
                 Some(w) => (c, w),
                 None => {
                     // 旧格式绝对权重迁移(被丢弃的脏数据行不计入迁移数):
                     if c >= 1_000_000 {
                         entries.retain(|e| e.word != word); // 0.1.1 前误学脏数据,直接丢
+                        dropped += 1;
                         continue;
                     }
                     migrated += 1;
+                    // 统一按 band 位置换算: c ≥ top → 曾登顶 → 2; 否则 1。
+                    // 不看 in_base —— 0.1.1/0.1.2 只选过一次的造词写的就是
+                    // c=10(NEW_WORD_WEIGHT),若因不在 base 而给 2,
+                    // 迁移后首周直接 #1 且一次再选就回 #1
                     let top = key_top(entries);
-                    let migrated_count = if in_base && u64::from(c) < top { 1 } else { 2 };
+                    let migrated_count = if u64::from(c) < top { 1 } else { 2 };
                     (migrated_count, now)
                 }
             };
@@ -241,7 +270,7 @@ impl PinyinEngine {
                 });
             }
         }
-        migrated
+        (migrated, dropped)
     }
 
     fn update_segments(&mut self) {
@@ -486,8 +515,9 @@ impl PinyinEngine {
     }
 
     /// 防误学 guard: 沿用 0.1.1 规则 — 纯 ASCII 不学、多字词音节数不足不学、
-    /// 含无效音节的碎片不学(碎片检查在 learn_phrase 内做)
-    fn learnable(word: &str, segs: &[String]) -> bool {
+    /// 多字词含无效音节不学(单字不受限: 前缀选单字如 在@z 仍可学;
+    /// 合法全拼多字词仍可学)
+    fn learnable(&self, word: &str, segs: &[String]) -> bool {
         if word.is_ascii() {
             return false;
         }
@@ -495,12 +525,15 @@ impl PinyinEngine {
         if char_count > 1 && segs.len() < char_count {
             return false;
         }
+        if char_count > 1 && segs.iter().any(|s| !self.syllables.contains(s.as_str())) {
+            return false;
+        }
         true
     }
 
     /// 选中即计数: 次数+1, 刷新周时间戳。base 词库信息永不覆盖。
     fn learn_word(&mut self, key: &str, word: &str, segs: &[String]) {
-        if !Self::learnable(word, segs) {
+        if !self.learnable(word, segs) {
             return;
         }
         let now = now_week();
@@ -521,7 +554,7 @@ impl PinyinEngine {
 
     /// 整句学习: 多词组合作为短语词条(淘词入库的数据源),同样计数制
     fn learn_phrase(&mut self, sentence: &str, segs: &[String]) {
-        if !Self::learnable(sentence, segs) {
+        if !self.learnable(sentence, segs) {
             return;
         }
         if segs.iter().any(|s| !self.syllables.contains(s.as_str())) {
@@ -546,6 +579,10 @@ impl PinyinEngine {
 
     /// 从内存全量写两个文件(旧实现是读改写整个文件,现在表即真相)
     fn save_userdb(&self) {
+        if !self.userdb_persist_ok {
+            log_error!("userdb 未成功加载,跳过落盘以防覆盖");
+            return;
+        }
         let Some(path) = self.userdb_path.as_ref() else { return };
         let Some(dir) = path.parent().map(|d| d.to_path_buf()) else { return };
         let mut lines: Vec<String> = Vec::new();
@@ -587,7 +624,7 @@ impl PinyinEngine {
         // (上下文语义 = 最近一个可学中文词)
         let word_key: String = remaining[..seg_count].concat();
         let word_segs: Vec<String> = remaining[..seg_count].to_vec();
-        if Self::learnable(&text, &word_segs) {
+        if self.learnable(&text, &word_segs) {
             self.bigram.bump(self.last_context.as_deref(), &text);
             self.last_context = Some(text.clone());
             self.learn_word(&word_key, &text, &word_segs);
@@ -1345,20 +1382,51 @@ mod tests {
 
     #[test]
     fn test_mislearn_fragment_gets_low_weight() {
-        // 误切分碎片(含无效音节)走整句学习路径: learn_phrase 的音节 guard 直接拒绝。
-        // (yo/n 本身都是合法音节,须用真正非法的音节才能触发 guard)
+        // guard 半边: 含真正非法音节("nn")的碎片, learn_phrase 路径直接拒绝
         let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
-        let segs: Vec<String> = vec!["yo".into(), "nn".into()]; // "nn" 非法音节
-        engine.learn_phrase("哟嗯", &segs);
-        let key: String = segs.concat();
-        let has = engine.table.get(&key).is_some_and(|v| v.iter().any(|x| x.word == "哟嗯"));
+        let bad_segs: Vec<String> = vec!["yo".into(), "nn".into()]; // "nn" 非法音节
+        engine.learn_phrase("哟嗯", &bad_segs);
+        let has = engine.table.get(&bad_segs.concat())
+            .is_some_and(|v| v.iter().any(|x| x.word == "哟嗯"));
         assert!(!has, "含无效音节的碎片必须被 guard 拒绝");
-        engine.learn_word(&key, "哟嗯", &segs); // learn_word 不查音节(前缀场景合法),count=1
+        // count=1 沉底半边: ["yo","n"] 两音节均合法 → 被存储、count=1、
+        // NEW_WORD_BASE 沉底(该测试的经典场景: 音节合法的碎片沉底而非霸榜)
+        let segs: Vec<String> = vec!["yo".into(), "n".into()];
+        let key: String = segs.concat();
+        engine.learn_word(&key, "哟嗯", &segs);
         // count=1 的造词 score = NEW_WORD_BASE, 排在所有 base 词之后
         let entries = engine.table.get(&key).unwrap();
         let top = crate::userdb::key_top(entries);
         let e = entries.iter().find(|x| x.word == "哟嗯").unwrap();
         assert_eq!(crate::userdb::entry_score(e, top, e.last_week), crate::userdb::NEW_WORD_BASE);
+    }
+
+    #[test]
+    fn invalid_syllable_prefix_selection_not_learned() {
+        // final review C1 回归: 输入 wob (切分 [wo,b], b 非完整音节),
+        // 前缀面板出现 wob* key 的多字词(如 我把@woba); 一次性选中后
+        // find_seg_count_for_word 前缀回退返回 remaining.len()=2,
+        // 旧 learnable 放行 → 在垃圾键 "wob" 下建词条,永久落盘。
+        // 恢复的 guard 必须拒绝: 多字词含无效音节不学。
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        for c in "wob".chars() { press_key(&mut engine, c); }
+        // 前缀面板含多字词(单字 exact 匹配在前,多字词在前 50 内但不一定第一页)。
+        // 必须选 2 字词(如 我把@woba): 字数==音节数,只有无效音节 guard 能拒绝;
+        // 3+ 字词会被既有的 segs.len()<字数 分支拒绝,测不到本 guard
+        let idx = engine.candidates.iter().position(|c| {
+            !c.text.is_ascii() && c.text.chars().count() == 2
+        }).expect("wob 前缀面板应含 2 字前缀候选 (如 我把@woba)");
+        let text = engine.candidates[idx].text.clone();
+        let actions = engine.select_candidate(idx);
+        assert!(
+            actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == &text)),
+            "前缀多字词选中应消耗全部音节并上屏: {text}"
+        );
+        assert!(
+            engine.table.get("wob").is_none_or(|v| v.is_empty()),
+            "无效音节垃圾键 wob 不得学习词条: {:?}",
+            engine.table.get("wob").map(|v| v.iter().map(|e| e.word.as_str()).collect::<Vec<_>>())
+        );
     }
 
 
@@ -1457,8 +1525,8 @@ mod tests {
     #[test]
     fn userdb_new_format_parses_count_and_week() {
         let mut engine = PinyinEngine::from_file(TEST_BASE).unwrap();
-        let migrated = engine.parse_userdb("jiu\t旧\tc=5 t=100\n");
-        assert_eq!(migrated, 0);
+        let (migrated, dropped) = engine.parse_userdb("jiu\t旧\tc=5 t=100\n");
+        assert_eq!((migrated, dropped), (0, 0));
         let entries = engine.table.get("jiu").unwrap();
         let jiu = entries.iter().find(|e| e.word == "旧").unwrap();
         assert_eq!((jiu.selection_count, jiu.last_week), (5, 100));
@@ -1469,8 +1537,8 @@ mod tests {
         let mut engine = PinyinEngine::from_file(TEST_BASE).unwrap();
         // 旧格式无 t= 字段。就=273122 为组内 top。
         // c ≥ key_top → 用户曾登顶 → count=2; 否则 count=1
-        let migrated = engine.parse_userdb("jiu\t旧\tc=273121\njiu\t久\tc=273700\n");
-        assert_eq!(migrated, 2);
+        let (migrated, dropped) = engine.parse_userdb("jiu\t旧\tc=273121\njiu\t久\tc=273700\n");
+        assert_eq!((migrated, dropped), (2, 0));
         let entries = engine.table.get("jiu").unwrap();
         let jiu = entries.iter().find(|e| e.word == "旧").unwrap();
         let jiu2 = entries.iter().find(|e| e.word == "久").unwrap();
@@ -1481,8 +1549,9 @@ mod tests {
     #[test]
     fn legacy_million_weight_garbage_dropped() {
         let mut engine = PinyinEngine::from_file(TEST_BASE).unwrap();
-        let migrated = engine.parse_userdb("zhe bu he shi\t着不合适\tc=1000000\njiu\t就\tc=273122\n");
-        assert_eq!(migrated, 1); // 只有"就"被迁移,1M 脏数据直接丢弃
+        let (migrated, dropped) =
+            engine.parse_userdb("zhe bu he shi\t着不合适\tc=1000000\njiu\t就\tc=273122\n");
+        assert_eq!((migrated, dropped), (1, 1)); // 只有"就"被迁移,1M 脏数据计入 dropped
         let z = engine.table.get("zhebuheshi").map(|v| v.iter().any(|e| e.word == "着不合适"));
         assert_ne!(z, Some(true));
     }
@@ -1499,12 +1568,33 @@ mod tests {
     }
 
     #[test]
+    fn legacy_once_selected_coined_word_migrates_to_one() {
+        // final review C2 回归: 0.1.1/0.1.2 对只选过一次的新词写的是 c=10
+        // (NEW_WORD_WEIGHT)。旧规则 `in_base && c<top ? 1 : 2` 对不在 base 的
+        // 造词恒给 2 → 迁移后首周直接 #1 且一次再选就回 #1。
+        // 修正后统一按 band 位置: c=10 < top(测试=2444) → count=1 沉底。
+        let mut engine = PinyinEngine::from_file(TEST_BASE).unwrap();
+        let (migrated, dropped) = engine.parse_userdb("ce shi\t测释\tc=10\n");
+        assert_eq!((migrated, dropped), (1, 0));
+        let entries = engine.table.get("ceshi").unwrap();
+        let ceshi = entries.iter().find(|e| e.word == "测释").unwrap();
+        assert_eq!(ceshi.selection_count, 1, "只选过一次(c=10)的造词必须迁移为 count=1");
+        // count=1 沉底: 输入 ceshi 时排在 base top(测试)之下
+        for c in "ceshi".chars() { press_key(&mut engine, c); }
+        let pos_ceshi = engine.candidates.iter().position(|c| c.text == "测释")
+            .expect("迁移后的测释应出现在候选中");
+        let pos_test = engine.candidates.iter().position(|c| c.text == "测试")
+            .expect("测试应出现在候选中");
+        assert!(pos_test < pos_ceshi, "count=1 迁移造词必须排在 base top(测试)之下");
+    }
+
+    #[test]
     fn corrupted_t_field_skipped_not_migrated() {
         let mut engine = PinyinEngine::from_file(TEST_BASE).unwrap();
-        // c= 合法但 t= 存在且不可解析 → 损坏行: 跳过且不计迁移,
+        // c= 合法但 t= 存在且不可解析 → 损坏行: 跳过且不计迁移(计入 dropped),
         // 不得误入 legacy 分支把计数收缩成 1/2
-        let migrated = engine.parse_userdb("ceshi\t测释\tc=5 t=abc\n");
-        assert_eq!(migrated, 0);
+        let (migrated, dropped) = engine.parse_userdb("ceshi\t测释\tc=5 t=abc\n");
+        assert_eq!((migrated, dropped), (0, 1));
         assert_ne!(engine.table.get("ceshi").map(|v| v.iter().any(|e| e.word == "测释")),
             Some(true), "损坏行不应入库");
     }
@@ -1769,5 +1859,75 @@ mod tests {
         engine3.load_userdb(&ud).unwrap();
         assert!(!bak.exists(), "新格式行不应触发备份");
         let _ = std::fs::remove_file(&ud); let _ = std::fs::remove_file(&bak);
+    }
+
+    #[test]
+    fn failed_load_disables_save_to_protect_real_file() {
+        // final review I3 回归: load_userdb Err 后(main.rs 只 log 继续),
+        // 近乎空的内存态会在下一次 commit 的 save_userdb 整写覆盖真实文件。
+        // 门闩: 加载失败 → userdb_persist_ok=false → save 全跳过(含 bigram)。
+        let dir = std::env::temp_dir().join(format!("feibai-noload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ud = dir.join("user.dict.txt");
+        let bg = dir.join("user.bigram.txt");
+        let tmp = dir.join("user.dict.txt.tmp");
+        // 把 user.dict.txt 路径建成目录 → read_to_string 失败 → load_userdb Err
+        std::fs::create_dir_all(&ud).unwrap();
+
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        engine.set_userdb_path(&ud);
+        assert!(engine.load_userdb(&ud).is_err(), "路径为目录时加载必须失败");
+
+        // 失败后走一次选中提交流程 → save_userdb 必须被跳过
+        for c in "ba".chars() { press_key(&mut engine, c); }
+        press_key(&mut engine, '1');
+        assert!(!bg.exists(), "加载失败后不得写出 bigram 文件(防覆盖)");
+        assert!(!tmp.exists(), "加载失败后不得写出 tmp 文件(防覆盖)");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn all_garbage_or_corrupt_file_backed_up_before_drop() {
+        // final review I4 回归: 纯垃圾(c≥1M)/纯损坏(t=不可解析)文件整文件被丢弃,
+        // 下次 save 直接清空 —— 破坏性丢弃前必须先备份(migrated=0 也要备份)。
+        let root = std::env::temp_dir().join(format!("feibai-garbage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // 场景1: 仅含 1M 垃圾行 → 备份生成 + 词条不入库
+        let dir1 = root.join("garbage");
+        std::fs::create_dir_all(&dir1).unwrap();
+        let ud1 = dir1.join("user.dict.txt");
+        let line = "zhe bu he shi\t着不合适\tc=2000000\n";
+        std::fs::write(&ud1, line).unwrap();
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE]).unwrap();
+        engine.load_userdb(&ud1).unwrap();
+        let bak1 = dir1.join("user.dict.txt.legacy-bak");
+        assert!(bak1.exists(), "纯垃圾文件被丢弃前应生成备份");
+        assert_eq!(std::fs::read_to_string(&bak1).unwrap(), line);
+        assert_ne!(
+            engine.table.get("zhebuheshi").map(|v| v.iter().any(|e| e.word == "着不合适")),
+            Some(true),
+            "垃圾行不得入库"
+        );
+
+        // 场景2: 仅含损坏 t= 行 → 同为破坏性丢弃,同样备份
+        let dir2 = root.join("corrupt");
+        std::fs::create_dir_all(&dir2).unwrap();
+        let ud2 = dir2.join("user.dict.txt");
+        std::fs::write(&ud2, "ceshi\t测释\tc=5 t=abc\n").unwrap();
+        let mut engine2 = PinyinEngine::from_files(&[TEST_BASE]).unwrap();
+        engine2.load_userdb(&ud2).unwrap();
+        let bak2 = dir2.join("user.dict.txt.legacy-bak");
+        assert!(bak2.exists(), "纯损坏文件被丢弃前应生成备份");
+        assert_ne!(
+            engine2.table.get("ceshi").map(|v| v.iter().any(|e| e.word == "测释")),
+            Some(true),
+            "损坏行不得入库"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
