@@ -4,19 +4,9 @@ use std::path::{Path, PathBuf};
 
 use feibai_core::*;
 
-struct DictEntry {
-    word: String,
-    weight: u64,
-    user: bool,
-}
+use crate::userdb::{key_top, now_week, DictEntry};
 
 const PAGE_SIZE: usize = 9;
-const MAX_USER_WEIGHT: u64 = 10_000_000;
-/// Initial weight for brand-new words not present in any dictionary.
-/// Kept low so mislearned fragments (yo+n → 哟嗯) sink to the bottom of
-/// candidates instead of suppressing real base-dict words. A genuinely wanted
-/// new word still reaches #1 via the 2-selection promotion (top_other±1).
-const NEW_WORD_WEIGHT: u64 = 10;
 
 pub struct PinyinEngine {
     table: BTreeMap<String, Vec<DictEntry>>,
@@ -54,7 +44,6 @@ impl PinyinEngine {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, String> {
         let mut engine = Self::new_empty();
         engine.load_dict(path)?;
-        engine.sort_entries();
         Ok(engine)
     }
 
@@ -63,7 +52,6 @@ impl PinyinEngine {
         for path in paths {
             engine.load_dict(path)?;
         }
-        engine.sort_entries();
         Ok(engine)
     }
 
@@ -150,21 +138,35 @@ impl PinyinEngine {
 
             self.table.entry(key).or_default().push(DictEntry {
                 word: word.to_string(),
-                weight,
-                user: false,
+                base_weight: weight,
+                selection_count: 0,
+                last_week: 0,
             });
         }
     }
 
     pub fn load_userdb(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
-        let content = fs::read_to_string(path.as_ref())
-            .map_err(|e| format!("failed to read userdb {}: {e}", path.as_ref().display()))?;
-        self.parse_userdb(&content);
-        self.sort_entries();
+        let path = path.as_ref();
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("failed to read userdb {}: {e}", path.display()))?;
+        let migrated = self.parse_userdb(&content);
+        if migrated > 0 {
+            // 首次迁移前备份原文件(幂等: 已有备份则不覆盖)
+            let bak = path.with_extension("txt.legacy-bak");
+            if !bak.exists() {
+                let _ = fs::copy(path, bak);
+            }
+            log_info!("userdb: migrated {migrated} legacy entries");
+        }
         Ok(())
     }
 
-    fn parse_userdb(&mut self, content: &str) {
+    /// 解析用户词典。返回迁移的旧格式行数(供备份决策)。
+    /// 新格式: `拼音\t词\tc=次数 t=周`(拼音为连写形式,与 table key 一致)
+    /// 旧格式: `拼音 空格分隔\t词\tc=绝对权重`(无 t= 字段,按 band 位置换算次数)
+    fn parse_userdb(&mut self, content: &str) -> usize {
+        let now = now_week();
+        let mut migrated = 0;
         for line in content.lines() {
             if line.starts_with('#') || line.trim().is_empty() {
                 continue;
@@ -179,41 +181,47 @@ impl PinyinEngine {
                 _ => continue,
             };
             let meta = parts.next().unwrap_or("");
-            let weight: u64 = meta
-                .split_whitespace()
-                .find_map(|s| s.strip_prefix("c="))
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(1);
-
+            let mut count: Option<u32> = None;
+            let mut week: Option<u32> = None;
+            for tok in meta.split_whitespace() {
+                if let Some(v) = tok.strip_prefix("c=") {
+                    count = v.parse().ok();
+                } else if let Some(v) = tok.strip_prefix("t=") {
+                    week = v.parse().ok();
+                }
+            }
+            let Some(c) = count else { continue };
             let key: String = pinyin_raw.split_whitespace().collect();
 
             let entries = self.table.entry(key).or_default();
+            let in_base = entries.iter().any(|e| e.word == word && e.selection_count == 0 && e.base_weight > 0);
+            let (count, last_week) = match week {
+                Some(w) => (c, w),
+                None => {
+                    // 旧格式绝对权重迁移(被丢弃的脏数据行不计入迁移数):
+                    if c >= 1_000_000 {
+                        entries.retain(|e| e.word != word); // 0.1.1 前误学脏数据,直接丢
+                        continue;
+                    }
+                    migrated += 1;
+                    let top = key_top(entries);
+                    let migrated_count = if in_base && u64::from(c) < top { 1 } else { 2 };
+                    (migrated_count, now)
+                }
+            };
             if let Some(existing) = entries.iter_mut().find(|e| e.word == word) {
-                existing.weight = weight;
-                existing.user = true;
+                existing.selection_count = count;
+                existing.last_week = last_week;
             } else {
                 entries.push(DictEntry {
                     word: word.to_string(),
-                    weight,
-                    user: true,
+                    base_weight: 0,
+                    selection_count: count,
+                    last_week,
                 });
             }
         }
-    }
-
-    fn sort_entries(&mut self) {
-        for entries in self.table.values_mut() {
-            entries.sort_by(|a, b| Self::cmp_entry(a, b));
-        }
-    }
-
-    /// Descending comparator: higher weight first, then user words, then longer
-    /// words, then lexicographic ascending (stable deterministic fallback).
-    fn cmp_entry(a: &DictEntry, b: &DictEntry) -> std::cmp::Ordering {
-        b.weight.cmp(&a.weight)
-            .then_with(|| b.user.cmp(&a.user))
-            .then_with(|| b.word.chars().count().cmp(&a.word.chars().count()))
-            .then_with(|| b.word.cmp(&a.word))
+        migrated
     }
 
     fn update_segments(&mut self) {
@@ -290,7 +298,7 @@ impl PinyinEngine {
                 .filter(|(k, _)| k.as_str() != prefix)
                 .flat_map(|(_, entries)| entries.iter())
                 .collect();
-            prefix_entries.sort_by(|a, b| b.weight.cmp(&a.weight));
+            prefix_entries.sort_by(|a, b| b.base_weight.cmp(&a.base_weight));
             for e in prefix_entries.iter().take(50) {
                 if seen.insert(e.word.clone()) {
                     self.candidates.push(Candidate {
@@ -308,7 +316,7 @@ impl PinyinEngine {
                     .filter(|(k, _)| k.len() <= 6)
                     .flat_map(|(_, entries)| entries.iter())
                     .collect();
-                single_prefix_entries.sort_by(|a, b| b.weight.cmp(&a.weight));
+                single_prefix_entries.sort_by(|a, b| b.base_weight.cmp(&a.base_weight));
                 for e in single_prefix_entries.iter().take(50) {
                     if seen.insert(e.word.clone()) {
                         self.candidates.push(Candidate {
@@ -370,7 +378,7 @@ impl PinyinEngine {
                 let key: String = segs[i..i + len].concat();
                 if let Some(entries) = self.table.get(&key) {
                     if let Some(best) = entries.first() {
-                        let word_score = (best.weight.max(1) as f64).ln();
+                        let word_score = (best.base_weight.max(1) as f64).ln();
                         let new_score = dp_score[i] + word_score;
                         let new_words = dp_words[i] + 1;
                         let j = i + len;
@@ -441,10 +449,9 @@ impl PinyinEngine {
         self.selected_seg_counts.push(seg_count);
 
         // If all syllables consumed, commit the full sentence
+        // (学习逻辑由 Task 4 的计数制 learn_word/learn_phrase 接入)
         if self.total_selected_segs() >= self.segments.len() {
             let sentence: String = self.selected_words.concat();
-            let all_segs = self.segments.clone();
-            self.learn_from_commit(&sentence, &all_segs);
             self.clear_composition();
             return vec![EngineAction::Commit(sentence)];
         }
@@ -456,140 +463,6 @@ impl PinyinEngine {
             EngineAction::UpdatePreedit(preedit_display),
             EngineAction::UpdateCandidates(self.current_page_candidates()),
         ]
-    }
-
-    fn learn_from_commit(&mut self, sentence: &str, pinyin_segs: &[String]) {
-        // Don't learn pure ASCII strings (raw pinyin / typo fragments)
-        if sentence.chars().all(|c| c.is_ascii()) {
-            return;
-        }
-
-        let key: String = pinyin_segs.concat();
-        let char_count = sentence.chars().count();
-        let is_single_char = char_count <= 1;
-
-        // Don't learn multi-char words with too-short keys (prefix match artifacts)
-        // Each Chinese character needs at least 1 pinyin syllable (>=2 chars typically)
-        if !is_single_char && pinyin_segs.len() < char_count {
-            return;
-        }
-        // Reject if any segment is not a valid pinyin syllable (typo fragments)
-        if !is_single_char && pinyin_segs.iter().any(|s| !self.syllables.contains(s.as_str())) {
-            return;
-        }
-
-        // For single chars: 2-selection promotion strategy
-        // 1st select: jump to just below current top (top - 1)
-        // 2nd select: overtake the top
-        if is_single_char {
-            let mut changed = false;
-            let mut persist_weight = 0u64;
-            if let Some(entries) = self.table.get_mut(&key) {
-                // Consider ALL other words (incl. base dict) as the blocker to overtake;
-                // otherwise a base-dict word (e.g. 有 blocking 又) never gets overtaken
-                // and the strategy degrades to +1.
-                let top_other = entries.iter()
-                    .filter(|e| e.word != sentence)
-                    .map(|e| e.weight)
-                    .max();
-                if let Some(entry) = entries.iter_mut().find(|e| e.word == sentence) {
-                    let old_weight = entry.weight;
-                    match top_other {
-                        Some(top) if entry.weight < top => {
-                            if entry.weight < top.saturating_sub(1) {
-                                entry.weight = top.saturating_sub(1);
-                            } else {
-                                entry.weight = top.saturating_add(1);
-                            }
-                        }
-                        _ => {
-                            entry.weight = entry.weight.saturating_add(1);
-                        }
-                    }
-                    entry.weight = entry.weight.min(MAX_USER_WEIGHT);
-                    changed = entry.weight != old_weight || !entry.user;
-                    entry.user = true;
-                    persist_weight = entry.weight;
-                    entries.sort_by(|a, b| Self::cmp_entry(a, b));
-                }
-            }
-            if changed {
-                let pinyin_spaced = pinyin_segs.join(" ");
-                self.save_userdb_entry(&pinyin_spaced, sentence, persist_weight);
-            }
-            return;
-        }
-
-        // NOTE: base-dict words are intentionally NOT skipped here. A user selecting a
-        // 2nd-place candidate (e.g. 书局 over 数据) wants it promoted; the promotion
-        // below handles overtaking the top. A weight-based skip (the old `>=1000` band)
-        // was self-defeating: the 1st select promotes the word into that band, then the
-        // 2nd select gets blocked by the same rule and never overtakes.
-
-        let pinyin_spaced = pinyin_segs.join(" ");
-
-        // Add/boost in memory — same 2-selection promotion as single chars:
-        // 1st select jumps to (top-1), 2nd select overtakes top. top_other includes
-        // base-dict words so a low-weight user word can actually climb past them.
-        let new_weight;
-        if let Some(entries) = self.table.get_mut(&key) {
-            let top_other = entries.iter()
-                .filter(|e| e.word != sentence)
-                .map(|e| e.weight)
-                .max();
-            if let Some(entry) = entries.iter_mut().find(|e| e.word == sentence) {
-                match top_other {
-                    Some(top) if entry.weight < top => {
-                        if entry.weight < top.saturating_sub(1) {
-                            entry.weight = top.saturating_sub(1);
-                        } else {
-                            entry.weight = top.saturating_add(1);
-                        }
-                    }
-                    _ => {
-                        entry.weight = entry.weight.saturating_add(1);
-                    }
-                }
-                entry.weight = entry.weight.min(MAX_USER_WEIGHT);
-                entry.user = true;
-                new_weight = entry.weight;
-            } else {
-                new_weight = NEW_WORD_WEIGHT;
-                entries.push(DictEntry { word: sentence.to_string(), weight: new_weight, user: true });
-            }
-            entries.sort_by(|a, b| Self::cmp_entry(a, b));
-        } else {
-            new_weight = NEW_WORD_WEIGHT;
-            self.table.insert(key, vec![DictEntry { word: sentence.to_string(), weight: new_weight, user: true }]);
-        }
-
-        // Write to user dict file
-        self.save_userdb_entry(&pinyin_spaced, sentence, new_weight);
-    }
-
-    fn save_userdb_entry(&self, pinyin_spaced: &str, word: &str, weight: u64) {
-        let Some(path) = &self.userdb_path else { return };
-        let content = fs::read_to_string(path).unwrap_or_default();
-        let prefix = format!("{}\t{}\t", pinyin_spaced, word);
-        let mut found = false;
-        let mut lines: Vec<String> = content
-            .lines()
-            .map(|line| {
-                if line.starts_with(&prefix) {
-                    found = true;
-                    format!("{}c={}", prefix, weight)
-                } else {
-                    line.to_string()
-                }
-            })
-            .collect();
-        if !found {
-            lines.push(format!("{}c={}", prefix, weight));
-        }
-        let tmp_path = path.with_extension("txt.tmp");
-        if fs::write(&tmp_path, lines.join("\n") + "\n").is_ok() {
-            let _ = fs::rename(&tmp_path, path);
-        }
     }
 
     fn find_seg_count_for_word(&self, word: &str, remaining: &[String]) -> usize {
@@ -1296,6 +1169,8 @@ mod tests {
         );
     }
 
+    // TODO(task6): 依计划 Task 6 重写 — 引用已删除的 learn_from_commit/旧字段 weight·user
+    /*
     #[test]
     fn test_mislearn_fragment_gets_low_weight() {
         // A multi-char word not present in any dictionary (a mislearn fragment like
@@ -1312,7 +1187,10 @@ mod tests {
             "mislearned fragment must land at NEW_WORD_WEIGHT (10), got {}", entry.weight);
         assert!(entry.user, "learned fragment must be flagged user");
     }
+    */
 
+    // TODO(task6): 依计划 Task 6 重写 — 引用已删除的 learn_from_commit/旧字段 weight
+    /*
     #[test]
     fn test_new_real_word_promotes_via_selections() {
         // A genuinely new multi-char word (not in dict) lands at NEW_WORD_WEIGHT,
@@ -1354,7 +1232,10 @@ mod tests {
         assert!(w3 > before3,
             "3rd select must overtake the top, got {} vs top_other {}", w3, before3);
     }
+    */
 
+    // TODO(task6): 依计划 Task 6 重写 — 引用已删除的旧 DictEntry 字面量构造/sort_entries
+    /*
     #[test]
     fn test_same_weight_tiebreak_stable() {
         // Two entries under the same key with equal weight must sort deterministically:
@@ -1385,6 +1266,51 @@ mod tests {
         // remaining base words sorted lexicographically (甲 < 乙 < 丙)
         assert_eq!(order1[1..], vec!["甲", "乙", "丙"],
             "base words tie-break must be lexicographic, got {:?}", order1);
+    }
+    */
+
+    #[test]
+    fn userdb_new_format_parses_count_and_week() {
+        let mut engine = PinyinEngine::from_file(TEST_BASE).unwrap();
+        let migrated = engine.parse_userdb("jiu\t旧\tc=5 t=100\n");
+        assert_eq!(migrated, 0);
+        let entries = engine.table.get("jiu").unwrap();
+        let jiu = entries.iter().find(|e| e.word == "旧").unwrap();
+        assert_eq!((jiu.selection_count, jiu.last_week), (5, 100));
+    }
+
+    #[test]
+    fn legacy_absolute_weight_migrates_by_band_position() {
+        let mut engine = PinyinEngine::from_file(TEST_BASE).unwrap();
+        // 旧格式无 t= 字段。就=273122 为组内 top。
+        // c ≥ key_top → 用户曾登顶 → count=2; 否则 count=1
+        let migrated = engine.parse_userdb("jiu\t旧\tc=273121\njiu\t久\tc=273700\n");
+        assert_eq!(migrated, 2);
+        let entries = engine.table.get("jiu").unwrap();
+        let jiu = entries.iter().find(|e| e.word == "旧").unwrap();
+        let jiu2 = entries.iter().find(|e| e.word == "久").unwrap();
+        assert_eq!(jiu.selection_count, 1); // c=273121 < top 273122
+        assert_eq!(jiu2.selection_count, 2); // c=273700 ≥ top
+    }
+
+    #[test]
+    fn legacy_million_weight_garbage_dropped() {
+        let mut engine = PinyinEngine::from_file(TEST_BASE).unwrap();
+        let migrated = engine.parse_userdb("zhe bu he shi\t着不合适\tc=1000000\njiu\t就\tc=273122\n");
+        assert_eq!(migrated, 1); // 只有"就"被迁移,1M 脏数据直接丢弃
+        let z = engine.table.get("zhebuheshi").map(|v| v.iter().any(|e| e.word == "着不合适"));
+        assert_ne!(z, Some(true));
+    }
+
+    #[test]
+    fn legacy_coined_word_gets_count_two() {
+        let mut engine = PinyinEngine::from_file(TEST_BASE).unwrap();
+        // 不在 base 的造词(曾被选中登顶过) → count=2
+        engine.parse_userdb("ce shi\t测释\tc=2445\n");
+        let entries = engine.table.get("ceshi").unwrap();
+        let ceshi = entries.iter().find(|e| e.word == "测释").unwrap();
+        assert_eq!(ceshi.selection_count, 2);
+        assert_eq!(ceshi.base_weight, 0);
     }
 
     #[test]
