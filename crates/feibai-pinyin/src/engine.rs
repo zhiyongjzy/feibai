@@ -1468,10 +1468,38 @@ mod tests {
             press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
         }
         assert!(bg.exists(), "commit 后应写出 bigram 文件");
-        // 会话 2: 重启加载,上下文延续
+        // 锁定 learn_word 计数递增 (0→1→2) 与周时间戳刷新
+        let content = std::fs::read_to_string(&ud).unwrap();
+        assert!(content.contains("wo\t我\tc=2 t="), "我 两次选中应 c=2: {content}");
+        assert!(content.contains("ba\t把\tc=2 t="), "把 两次选中应 c=2: {content}");
+        assert!(!content.contains("woba\t"), "单字 commit 不应学习短语: {content}");
+        let week = content
+            .lines()
+            .find(|l| l.starts_with("wo\t我\tc=2 t="))
+            .and_then(|l| l.split_whitespace().find_map(|tok| tok.strip_prefix("t=").and_then(|v| v.parse::<u32>().ok())))
+            .expect("wo\t我 行应带 t=周");
+        assert_eq!(week, now_week(), "t= 应刷新为当前周");
+
+        // 渐进选择产生短语: "woba" 先选 我 再选 吧。
+        // 我吧 不在词典 → 第一次走 learn_phrase 新条目 push, 第二次走 1→2 递增
+        for _ in 0..2 {
+            for c in "woba".chars() { press_key(&mut engine, c); }
+            let idx = engine.candidates.iter().position(|c| c.text == "我").unwrap();
+            press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+            let idx = engine.candidates.iter().position(|c| c.text == "吧").unwrap();
+            press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        }
+        let content = std::fs::read_to_string(&ud).unwrap();
+        assert!(content.contains("woba\t我吧\tc=2 t="), "渐进两次应学习短语 我吧 c=2: {content}");
+
+        // 会话 2: 重启加载,bigram 上下文延续 + 短语计数保留
         let mut engine2 = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
         engine2.load_userdb(&ud).unwrap();
         assert_eq!(engine2.bigram.count("我", "把"), 2, "重启后 bigram 计数应保留");
+        let phrase = engine2.table.get("woba").unwrap()
+            .iter().find(|e| e.word == "我吧").expect("重启后短语词条应在");
+        assert_eq!((phrase.selection_count, phrase.base_weight), (2, 0),
+            "短语计数保留,且造词 base_weight 保持 0");
         let _ = std::fs::remove_file(&ud); let _ = std::fs::remove_file(&bg);
     }
 
