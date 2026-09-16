@@ -488,14 +488,12 @@ impl PinyinEngine {
     /// 防误学 guard: 沿用 0.1.1 规则 — 纯 ASCII 不学、多字词音节数不足不学、
     /// 含无效音节的碎片不学(碎片检查在 learn_phrase 内做)
     fn learnable(word: &str, segs: &[String]) -> bool {
-        if word.chars().all(|c| c.is_ascii()) {
+        if word.is_ascii() {
             return false;
         }
         let char_count = word.chars().count();
-        if char_count > 1 {
-            if segs.len() < char_count {
-                return false;
-            }
+        if char_count > 1 && segs.len() < char_count {
+            return false;
         }
         true
     }
@@ -584,12 +582,16 @@ impl PinyinEngine {
         let remaining = &self.segments[offset..];
         let seg_count = self.find_seg_count_for_word(&text, remaining);
 
-        // 学习: 选中即计数 + 上下文 bigram(前词=上次选中/上屏词)
+        // 学习: 选中即计数 + 上下文 bigram(前词=上次选中/上屏词)。
+        // 仅对可学词记录: ASCII 原样上屏既不记共现也不更新上下文
+        // (上下文语义 = 最近一个可学中文词)
         let word_key: String = remaining[..seg_count].concat();
         let word_segs: Vec<String> = remaining[..seg_count].to_vec();
-        self.bigram.bump(self.last_context.as_deref(), &text);
-        self.learn_word(&word_key, &text, &word_segs);
-        self.last_context = Some(text.clone());
+        if Self::learnable(&text, &word_segs) {
+            self.bigram.bump(self.last_context.as_deref(), &text);
+            self.last_context = Some(text.clone());
+            self.learn_word(&word_key, &text, &word_segs);
+        }
 
         self.selected_words.push(text);
         self.selected_seg_counts.push(seg_count);
@@ -1341,105 +1343,116 @@ mod tests {
         );
     }
 
-    // TODO(task6): 依计划 Task 6 重写 — 引用已删除的 learn_from_commit/旧字段 weight·user
-    /*
     #[test]
     fn test_mislearn_fragment_gets_low_weight() {
-        // A multi-char word not present in any dictionary (a mislearn fragment like
-        // 哟嗯 from yo+n segmentation) must land at NEW_WORD_WEIGHT, NOT the old
-        // 1_000_000, so it cannot suppress real base-dict words.
+        // 误切分碎片(含无效音节)走整句学习路径: learn_phrase 的音节 guard 直接拒绝。
+        // (yo/n 本身都是合法音节,须用真正非法的音节才能触发 guard)
         let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
-        let segs: Vec<String> = vec!["yo".into(), "n".into()];
-        engine.learn_from_commit("哟嗯", &segs);
+        let segs: Vec<String> = vec!["yo".into(), "nn".into()]; // "nn" 非法音节
+        engine.learn_phrase("哟嗯", &segs);
         let key: String = segs.concat();
-        let entries = engine.table.get(&key).expect("fragment should be stored");
-        let entry = entries.iter().find(|e| e.word == "哟嗯")
-            .expect("哟嗯 entry should exist");
-        assert_eq!(entry.weight, NEW_WORD_WEIGHT,
-            "mislearned fragment must land at NEW_WORD_WEIGHT (10), got {}", entry.weight);
-        assert!(entry.user, "learned fragment must be flagged user");
+        let has = engine.table.get(&key).is_some_and(|v| v.iter().any(|x| x.word == "哟嗯"));
+        assert!(!has, "含无效音节的碎片必须被 guard 拒绝");
+        engine.learn_word(&key, "哟嗯", &segs); // learn_word 不查音节(前缀场景合法),count=1
+        // count=1 的造词 score = NEW_WORD_BASE, 排在所有 base 词之后
+        let entries = engine.table.get(&key).unwrap();
+        let top = crate::userdb::key_top(entries);
+        let e = entries.iter().find(|x| x.word == "哟嗯").unwrap();
+        assert_eq!(crate::userdb::entry_score(e, top, e.last_week), crate::userdb::NEW_WORD_BASE);
     }
-    */
 
-    // TODO(task6): 依计划 Task 6 重写 — 引用已删除的 learn_from_commit/旧字段 weight
-    /*
+
     #[test]
     fn test_new_real_word_promotes_via_selections() {
-        // A genuinely new multi-char word (not in dict) lands at NEW_WORD_WEIGHT,
-        // then climbs via the promotion path: 1st select → NEW_WORD_WEIGHT (new entry),
-        // 2nd select → top_other-1 (just below #1), 3rd select → top_other+1 (overtake).
-        // This proves P0-1 does not block learning legitimate new words — it just
-        // takes one extra selection vs. a word that already exists in the dict.
+        // 真实新词(测释,不在词典): count=1 沉底 → count=2 反超 key_top → count=8 更高。
+        // 计数制下不再有绝对权重(旧断言 10/2443/2445),改按 score 相对位置断言。
         let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
         let segs: Vec<String> = vec!["ce".into(), "shi".into()];
         let key: String = segs.concat();
-        // "测释" (2 chars, 2 syllables) is absent from the dict — stands in for any
-        // user-coined word. Confirm precondition.
-        assert!(engine.table.get(&key).map_or(true, |e| !e.iter().any(|x| x.word == "测释")),
+        // "测释" (2 chars, 2 syllables) 不在词典 — 代表任意用户造词。前置确认。
+        assert!(engine.table.get(&key).is_some_and(|e| !e.iter().any(|x| x.word == "测释")),
             "precondition: word must not exist in dict");
-        let top_other_of = |eng: &PinyinEngine| -> u64 {
-            eng.table.get(&key).unwrap().iter()
-                .filter(|e| e.word != "测释").map(|e| e.weight).max().unwrap_or(0)
+        let score_of = |eng: &PinyinEngine| -> u64 {
+            let entries = eng.table.get(&key).unwrap();
+            let top = key_top(entries);
+            let e = entries.iter().find(|x| x.word == "测释").unwrap();
+            entry_score(e, top, e.last_week)
         };
 
-        // 1st select: new entry lands at NEW_WORD_WEIGHT (10).
-        engine.learn_from_commit("测释", &segs);
-        let w1 = engine.table.get(&key).unwrap().iter()
-            .find(|e| e.word == "测释").unwrap().weight;
-        assert_eq!(w1, NEW_WORD_WEIGHT, "1st select must land at NEW_WORD_WEIGHT");
+        // 行为检查辅助: 输入 ceshi → 断言 → Escape 清空,避免 preedit 残留
+        let escape = |eng: &mut PinyinEngine| {
+            eng.process_key(&KeyEvent {
+                keysym: 0xff1b,
+                unicode: None,
+                modifiers: Modifiers::default(),
+                state: KeyState::Press,
+            });
+        };
+        let type_ceshi = |eng: &mut PinyinEngine| {
+            for c in "ceshi".chars() { press_key(eng, c); }
+        };
 
-        // 2nd select: jumps to top_other - 1 (just below 测试=2444 → 2443).
-        let before2 = top_other_of(&engine);
-        engine.learn_from_commit("测释", &segs);
-        let w2 = engine.table.get(&key).unwrap().iter()
-            .find(|e| e.word == "测释").unwrap().weight;
-        assert_eq!(w2, before2.saturating_sub(1),
-            "2nd select must climb to top_other-1, got {} (top_other={})", w2, before2);
+        // 1st select: count=1 沉底 NEW_WORD_BASE, 低于 key_top(测试=2444)
+        engine.learn_word(&key, "测释", &segs);
+        let top = key_top(engine.table.get(&key).unwrap());
+        assert_eq!(score_of(&engine), crate::userdb::NEW_WORD_BASE,
+            "count=1 造词必须沉底 NEW_WORD_BASE");
+        type_ceshi(&mut engine);
+        let pos = |eng: &PinyinEngine, w: &str| {
+            eng.candidates.iter().position(|c| c.text == w).unwrap()
+        };
+        assert!(pos(&engine, "测试") < pos(&engine, "测释"),
+            "count=1 时测释必须排在测试之后");
+        escape(&mut engine);
 
-        // 3rd select: overtakes → top_other + 1 (2445 > 2444).
-        let before3 = top_other_of(&engine);
-        engine.learn_from_commit("测释", &segs);
-        let w3 = engine.table.get(&key).unwrap().iter()
-            .find(|e| e.word == "测释").unwrap().weight;
-        assert!(w3 > before3,
-            "3rd select must overtake the top, got {} vs top_other {}", w3, before3);
+        // 2nd select: count=2 → score = top-1+2 反超登顶
+        engine.learn_word(&key, "测释", &segs);
+        assert!(score_of(&engine) > top, "count=2 须反超 key_top(={top})");
+        type_ceshi(&mut engine);
+        assert_eq!(engine.candidates[0].text, "测释", "count=2 后测释应登顶");
+        escape(&mut engine);
+
+        // count=8: 步进 2*log2(count) 更高,仍居首位
+        for _ in 0..6 { engine.learn_word(&key, "测释", &segs); }
+        assert!(score_of(&engine) > top + 2, "count=8 分数须高于 count=2 的 top+2");
+        type_ceshi(&mut engine);
+        assert_eq!(engine.candidates[0].text, "测释", "count=8 测释保持首位");
     }
-    */
 
-    // TODO(task6): 依计划 Task 6 重写 — 引用已删除的旧 DictEntry 字面量构造/sort_entries
-    /*
     #[test]
     fn test_same_weight_tiebreak_stable() {
-        // Two entries under the same key with equal weight must sort deterministically:
-        // user flag first, then longer word, then lexicographic. Sorting twice must
-        // yield identical order (no instability).
+        // 同 key 条目排序必须确定且可重复。cmp_ranked 决胜链:
+        // 分数降序 → base_weight 降序 → 字数降序 → 字典序降序。
         let mut engine = PinyinEngine::new_empty();
         let key = "xx".to_string();
-        let mk = |word: &str, weight: u64, user: bool| DictEntry {
-            word: word.to_string(), weight, user,
+        let mk = |word: &str, base: u64, count: u32| DictEntry {
+            word: word.to_string(),
+            base_weight: base,
+            selection_count: count,
+            last_week: 0,
         };
+        // top=100。用户词 count=1 → score top-1=99, 与 base 99 的词同分,
+        // 靠决胜链第二级(base_weight 降序)排在前面。
         engine.table.insert(key.clone(), vec![
-            mk("乙", 100, false),       // base, 1 char
-            mk("甲", 100, false),       // base, 1 char — lexicographic before 乙
-            mk("用户词", 100, true),    // user, 2 chars — should rank #1
-            mk("丙", 100, false),       // base, 1 char
+            mk("乙", 100, 0),      // 与甲同分同 base 同字数 → 字典序降序(甲 > 乙)
+            mk("甲", 100, 0),
+            mk("用户词", 100, 1),  // score 99; base 100 > 同分词的 99 → 胜出
+            mk("同分", 99, 0),     // score 99
+            mk("词词", 50, 0),     // 与丁同分同 base → 字数降序(2字 > 1字)
+            mk("丁", 50, 0),
         ]);
-        engine.sort_entries();
-        let order1: Vec<String> = engine.table.get(&key).unwrap().iter()
-            .map(|e| e.word.clone()).collect();
-        // sort again — must be stable
-        engine.sort_entries();
-        let order2: Vec<String> = engine.table.get(&key).unwrap().iter()
-            .map(|e| e.word.clone()).collect();
+        let sort_once = |eng: &mut PinyinEngine| -> Vec<String> {
+            let entries = eng.table.get_mut(&key).unwrap();
+            let top = key_top(entries);
+            entries.sort_by(|a, b| cmp_ranked(a, b, top, 0));
+            entries.iter().map(|e| e.word.clone()).collect()
+        };
+        let order1 = sort_once(&mut engine);
+        let order2 = sort_once(&mut engine);
         assert_eq!(order1, order2, "sort must be stable across repeated calls");
-        // user word (用户词, 2 chars) must rank ahead of all base 1-char words
-        assert_eq!(order1[0], "用户词",
-            "user word must rank first on weight tie, got {:?}", order1);
-        // remaining base words sorted lexicographically (甲 < 乙 < 丙)
-        assert_eq!(order1[1..], vec!["甲", "乙", "丙"],
-            "base words tie-break must be lexicographic, got {:?}", order1);
+        assert_eq!(order1, vec!["甲", "乙", "用户词", "同分", "词词", "丁"],
+            "tie-break chain: score → base_weight → chars → lexicographic, got {order1:?}");
     }
-    */
 
     #[test]
     fn userdb_new_format_parses_count_and_week() {
@@ -1625,6 +1638,30 @@ mod tests {
     }
 
     #[test]
+    fn ascii_raw_selection_records_no_context() {
+        // ASCII 原样上屏不可学: 既不记 bigram 共现,也不更新 last_context
+        // (上下文语义 = 最近一个可学中文词,不能被 ASCII 打断)
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        // 建立非空上下文: 选中 我
+        for c in "wo".chars() { press_key(&mut engine, c); }
+        let idx = engine.candidates.iter().position(|c| c.text == "我").unwrap();
+        press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        assert_eq!(engine.last_context.as_deref(), Some("我"));
+
+        // 输入无中文匹配的 ASCII 串 → 首候选为原样 "abc",选中它上屏
+        for c in "abc".chars() { press_key(&mut engine, c); }
+        assert_eq!(engine.candidates[0].text, "abc", "首位应为原样 ASCII 候选");
+        let actions = press_key(&mut engine, '1');
+        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "abc")));
+
+        // 不记 (我,abc) 共现; 上下文保持 我 不变
+        assert_eq!(engine.bigram.count("我", "abc"), 0,
+            "ASCII 原样上屏不得记入 bigram");
+        assert_eq!(engine.last_context.as_deref(), Some("我"),
+            "ASCII 原样上屏后上下文应保持不变");
+    }
+
+    #[test]
     fn single_letter_prefix_not_dominated_by_learned_fragment() {
         // 迁移日志中的真实案例: 造词"着不合适"曾被学到 1M 权重,污染每个 z 前缀面板 4920 次
         // 新机制: 造词 count<2 沉底;即便 count=2,也只在其自身 key("zhebuheshi"全拼)内登顶,
@@ -1705,4 +1742,3 @@ mod tests {
         let _ = std::fs::remove_file(&ud); let _ = std::fs::remove_file(&bak);
     }
 }
-

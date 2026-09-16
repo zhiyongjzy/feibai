@@ -6,7 +6,7 @@
 
 - **双模式运行** — Wayland 原生（input-method-v2）+ IBus（GNOME/KDE）
 - **整句输入** — Viterbi DP 分词，自动选择最优路径
-- **用户词学习** — 去重 + 权重累加，常用词自动靠前
+- **用户词学习** — 选中计数 + 周期衰减，常用词自动靠前；上下文共现（bigram）参与排序
 - **9 种主题** — Light / Dark / Flat / Blue / Sakura / Ocean / Lavender / Tangerine / Mint（仅 Wayland 模式，IBus 使用系统候选窗）
 - **超轻量** — 单一 ~8MB 二进制，3 线程 async-io，无 tokio 依赖
 - **MIT 词库** — 35 万词条，无 GPL 污染
@@ -120,7 +120,8 @@ theme = "dark"   # light/dark/flat/blue/sakura/ocean/lavender/tangerine/mint
 - `feibai.extra.dict.yaml` — 扩展词库（互联网热词）
 - `feibai.tech.dict.yaml` — 技术词库
 - `feibai.en.dict.yaml` — 英文词库（Google 万词，混输）
-- `user.dict.txt` — 用户词库（自动生成，选词后自动学习）
+- `user.dict.txt` — 用户词库（自动生成，选词后自动学习；格式 `拼音\t词\tc=次数 t=周`，旧格式自动迁移备份）
+- `user.bigram.txt` — 用户上下文共现计数（自动生成，前词→当前词的搭配记录）
 
 词库格式兼容 Rime YAML dict 格式。详见 [data/dicts/SOURCES.md](data/dicts/SOURCES.md)。
 
@@ -136,7 +137,7 @@ theme = "dark"   # light/dark/flat/blue/sakura/ocean/lavender/tangerine/mint
 
 - **只同步新词** — 只同步 `word` 不在任何仓库词典（base/tech/extra）中的词，base/tech 已覆盖的词靠本地 `user.dict.txt` 学习，不重复入库
 - **通用性过滤** — 自动过滤含字母/数字杂质（如 `手doong`）和明显的人名/称呼模式（如 `X总`、`X老师`、`阿X`），被过滤的词保留在本地不影响个人使用
-- **权重映射** — 用户词的 `c=1000000+n` 映射到 extra 词库 `[10000, 49000]` 区间，保留相对排序，不挤掉内置高频词
+- **权重映射** — 用户词计数格式（`c=次数 t=周`，次数为小数值）同步时统一映射为固定权重 30000；旧格式 `c=1000000+n` 行仍映射到 `[10000, 49000]` 区间
 - **幂等** — 重复运行不会重复添加
 - **保留原词条顺序** — 只追加新词到文件末尾，不重排已有词条，git diff 清晰可审查
 
