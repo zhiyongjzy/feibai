@@ -1662,6 +1662,35 @@ mod tests {
     }
 
     #[test]
+    fn abbreviated_multichar_selection_records_no_context() {
+        // 简拼选择不可学 (learnable 的另一条 false 分支): 非 ASCII 多字词但音节数 < 字数。
+        // 与 ASCII 原样上屏同为上下文盲区 —— 既不记 bigram 共现,也不更新 last_context
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        // 建立非空上下文: 选中 我
+        for c in "wo".chars() { press_key(&mut engine, c); }
+        let idx = engine.candidates.iter().position(|c| c.text == "我").unwrap();
+        press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        assert_eq!(engine.last_context.as_deref(), Some("我"));
+
+        // 简拼输入 "zh" (1 个音节段) → 前缀面板含多字词 (中国/这个/…);
+        // 选中一个 2+ 字词: 字数 > 音节数 → learnable 为 false
+        for c in "zh".chars() { press_key(&mut engine, c); }
+        let idx = engine.candidates.iter().position(|c| {
+            !c.text.is_ascii() && c.text.chars().count() > 1
+        }).expect("zh 前缀面板应含多字词 (如 中国)");
+        assert!(idx < 9, "多字词应在第一页, got idx {idx}");
+        let text = engine.candidates[idx].text.clone();
+        let actions = press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == &text)));
+
+        // 不记 (我, 该词) 共现; 上下文保持 我 不变
+        assert_eq!(engine.bigram.count("我", &text), 0,
+            "简拼选择多字词不得记入 bigram");
+        assert_eq!(engine.last_context.as_deref(), Some("我"),
+            "简拼选择多字词后上下文应保持不变");
+    }
+
+    #[test]
     fn single_letter_prefix_not_dominated_by_learned_fragment() {
         // 迁移日志中的真实案例: 造词"着不合适"曾被学到 1M 权重,污染每个 z 前缀面板 4920 次
         // 新机制: 造词 count<2 沉底;即便 count=2,也只在其自身 key("zhebuheshi"全拼)内登顶,

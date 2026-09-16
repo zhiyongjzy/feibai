@@ -13,8 +13,13 @@
 #
 # 被过滤的词保留在本地 user.dict.txt (不影响个人使用), 只是不入仓库。
 #
-# 权重映射: 用户词的 c=1000000+n (n 为选中次数) → extra 区间 [10000, 49000],
+# 权重映射: 用户词计数 c=N (新格式 `c=N t=周`; 旧格式无 t= 行按 N=1 过渡处理,
+# 引擎重启后 user.dict.txt 会自动迁移成新格式) → log2 曲线映射到 extra 区间
+# [10000, 49000]: 次数每翻倍约 +6500, c≥64 封顶 49000 (仍低于 extra 头词的 50000),
 # 保留相对排序, 不挤掉内置高频词。
+#
+# 拼音列: 统一输出连写形式 (与新格式 user.dict.txt 的拼音列一致; engine 的
+# parse_rime_dict 对连写/空格分隔拼音均兼容), 旧格式行的空格分隔拼音先归一化。
 set -euo pipefail
 
 # --- 路径 ---
@@ -35,7 +40,7 @@ if [ ! -f "$EXTRA_DICT" ]; then
 fi
 
 python3 - "$USER_DICT" "$EXTRA_DICT" "$BASE_DICT" "$TECH_DICT" << 'PYEOF'
-import sys, os, re
+import sys, os, re, math
 
 user_dict, extra, base, tech = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
@@ -94,18 +99,14 @@ def is_title_word(word):
         return True
     return False
 
-def map_weight(n):
-    """c=1000000+n → [10000, 49000]；低于基准的给 30000"""
-    base = 1000000
-    if n < base:
-        return 30000
-    inc = (n - base) * 10
-    if inc > 39000:
-        inc = 39000
-    return 10000 + inc
+def map_weight(count):
+    """count(选中次数) → [10000, 49000], log2 曲线: 每翻倍约 +6500, c≥64 封顶。
+    封顶 49000 仍低于 extra 头词(50000), 不挤掉内置高频词; count=1 沉底 10000。"""
+    ratio = min(1.0, math.log2(count) / math.log2(64))
+    return round(10000 + 39000 * ratio)
 
 # --- 收集可同步的词 ---
-new_words = {}          # (word, pinyin) -> n (权重)
+new_words = {}          # (word, pinyin) -> count (选中次数)
 filtered = {'junk': [], 'title': []}   # 统计被过滤的
 
 for line in open(user_dict, encoding='utf-8'):
@@ -117,6 +118,9 @@ for line in open(user_dict, encoding='utf-8'):
     pinyin, word, meta = parts[0], parts[1], parts[2]
     if not pinyin or not word:
         continue
+    # 拼音归一化成连写形式: 新格式本就连写, 旧格式空格分隔;
+    # 同词的新旧格式行据此正确去重
+    pinyin = ''.join(pinyin.split())
     # 已在仓库词典中的词跳过 (按 word 判断, 避免对 base/tech 已覆盖的词重复入库)
     if word in repo_words:
         continue
@@ -130,21 +134,31 @@ for line in open(user_dict, encoding='utf-8'):
         filtered['title'].append(word)
         continue
 
-    # 提取 c= 权重
-    n = 1000000
+    # 提取 c= 计数 (双格式):
+    #   新格式 "c=N t=W" → count=N
+    #   旧格式 "c=M" (无 t=, 绝对权重) → count=1 (过渡兼容, 引擎重启后文件自动迁移)
+    count = None
+    has_t = False
     for tok in meta.split():
         if tok.startswith('c='):
             try:
-                n = int(tok[2:])
+                count = int(tok[2:])
             except ValueError:
                 pass
-            break
+        elif tok.startswith('t='):
+            has_t = True
+    if count is None:
+        continue  # 无有效 c= 字段, 跳过
+    if not has_t:
+        count = 1
+    if count < 1:
+        count = 1  # c=0/负数防御: log2 需要 ≥1
     key = (word, pinyin)
-    if key not in new_words or new_words[key] < n:
-        new_words[key] = n
+    if key not in new_words or new_words[key] < count:
+        new_words[key] = count
 
 # 生成新词条, 权重降序
-entries = [(map_weight(n), w, p) for (w, p), n in new_words.items()]
+entries = [(map_weight(c), w, p) for (w, p), c in new_words.items()]
 entries.sort(key=lambda x: -x[0])
 
 # 追加到 extra 末尾 (不重排已有词条)
