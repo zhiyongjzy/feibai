@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use feibai_core::*;
 
-use crate::userdb::{key_top, now_week, DictEntry};
+use crate::userdb::{DictEntry, UserBigram, key_top, now_week};
 
 const PAGE_SIZE: usize = 9;
 
@@ -21,6 +21,9 @@ pub struct PinyinEngine {
     chinese_mode: bool,
     shift_pressed_alone: bool,
     userdb_path: Option<PathBuf>,
+    bigram: UserBigram,
+    last_context: Option<String>,
+    userdb_dirty: bool,
 }
 
 impl PinyinEngine {
@@ -38,6 +41,9 @@ impl PinyinEngine {
             chinese_mode: true,
             shift_pressed_alone: false,
             userdb_path: None,
+            bigram: UserBigram::default(),
+            last_context: None,
+            userdb_dirty: false,
         }
     }
 
@@ -154,10 +160,17 @@ impl PinyinEngine {
             // 首次迁移前备份原文件(幂等: 已有备份则不覆盖)
             let bak = path.with_extension("txt.legacy-bak");
             if !bak.exists() {
-                let _ = fs::copy(path, bak);
+                if let Err(e) = fs::copy(path, &bak) {
+                    // 备份失败不必中断加载,但不可静默吞掉
+                    log_error!("failed to backup userdb {} -> {}: {e}", path.display(), bak.display());
+                }
             }
             log_info!("userdb: migrated {migrated} legacy entries");
         }
+        // bigram 与 unigram 同目录共存,重启后上下文延续
+        let bigram_path = path.with_file_name("user.bigram.txt");
+        self.bigram = UserBigram::load(&bigram_path)
+            .map_err(|e| format!("failed to load user bigram: {e}"))?;
         Ok(())
     }
 
@@ -183,14 +196,21 @@ impl PinyinEngine {
             let meta = parts.next().unwrap_or("");
             let mut count: Option<u32> = None;
             let mut week: Option<u32> = None;
+            let mut has_t = false; // 区分"无 t= 字段(legacy)"与"t= 存在但非法(损坏)"
             for tok in meta.split_whitespace() {
                 if let Some(v) = tok.strip_prefix("c=") {
                     count = v.parse().ok();
                 } else if let Some(v) = tok.strip_prefix("t=") {
+                    has_t = true;
                     week = v.parse().ok();
                 }
             }
             let Some(c) = count else { continue };
+            if has_t && week.is_none() {
+                // 损坏行: 跳过,防止误入 legacy 迁移分支收缩计数
+                log_error!("userdb: corrupted line (unparseable t=), skipped: {line}");
+                continue;
+            }
             let key: String = pinyin_raw.split_whitespace().collect();
 
             let entries = self.table.entry(key).or_default();
@@ -434,6 +454,94 @@ impl PinyinEngine {
         (self.candidates.len() + PAGE_SIZE - 1) / PAGE_SIZE
     }
 
+    /// 防误学 guard: 沿用 0.1.1 规则 — 纯 ASCII 不学、多字词音节数不足不学、
+    /// 含无效音节的碎片不学(碎片检查在 learn_phrase 内做)
+    fn learnable(word: &str, segs: &[String]) -> bool {
+        if word.chars().all(|c| c.is_ascii()) {
+            return false;
+        }
+        let char_count = word.chars().count();
+        if char_count > 1 {
+            if segs.len() < char_count {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// 选中即计数: 次数+1, 刷新周时间戳。base 词库信息永不覆盖。
+    fn learn_word(&mut self, key: &str, word: &str, segs: &[String]) {
+        if !Self::learnable(word, segs) {
+            return;
+        }
+        let now = now_week();
+        let entries = self.table.entry(key.to_string()).or_default();
+        if let Some(e) = entries.iter_mut().find(|e| e.word == word) {
+            e.selection_count = e.selection_count.saturating_add(1);
+            e.last_week = now;
+        } else {
+            entries.push(DictEntry {
+                word: word.to_string(),
+                base_weight: 0,
+                selection_count: 1,
+                last_week: now,
+            });
+        }
+        self.userdb_dirty = true;
+    }
+
+    /// 整句学习: 多词组合作为短语词条(淘词入库的数据源),同样计数制
+    fn learn_phrase(&mut self, sentence: &str, segs: &[String]) {
+        if !Self::learnable(sentence, segs) {
+            return;
+        }
+        if segs.iter().any(|s| !self.syllables.contains(s.as_str())) {
+            return;
+        }
+        let key: String = segs.concat();
+        let now = now_week();
+        let entries = self.table.entry(key).or_default();
+        if let Some(e) = entries.iter_mut().find(|e| e.word == sentence) {
+            e.selection_count = e.selection_count.saturating_add(1);
+            e.last_week = now;
+        } else {
+            entries.push(DictEntry {
+                word: sentence.to_string(),
+                base_weight: 0,
+                selection_count: 1,
+                last_week: now,
+            });
+        }
+        self.userdb_dirty = true;
+    }
+
+    /// 从内存全量写两个文件(旧实现是读改写整个文件,现在表即真相)
+    fn save_userdb(&self) {
+        let Some(path) = self.userdb_path.as_ref() else { return };
+        let Some(dir) = path.parent().map(|d| d.to_path_buf()) else { return };
+        let mut lines: Vec<String> = Vec::new();
+        for (key, entries) in &self.table {
+            for e in entries {
+                if e.selection_count > 0 {
+                    lines.push(format!("{}\t{}\tc={} t={}", key, e.word, e.selection_count, e.last_week));
+                }
+            }
+        }
+        lines.sort();
+        // 空表写 0 字节文件,与 bigram 空文件语义一致
+        let content = if lines.is_empty() { String::new() } else { lines.join("\n") + "\n" };
+        let tmp = path.with_extension("txt.tmp");
+        if let Err(e) = fs::write(&tmp, content) {
+            log_error!("failed to write {}: {e}", tmp.display());
+            return;
+        }
+        if let Err(e) = fs::rename(&tmp, path) {
+            log_error!("failed to rename {} -> {}: {e}", tmp.display(), path.display());
+            let _ = fs::remove_file(&tmp);
+        }
+        self.bigram.save(&dir.join("user.bigram.txt"));
+    }
+
     fn select_candidate(&mut self, idx: usize) -> Vec<EngineAction> {
         let text = match self.candidates.get(idx) {
             Some(c) => c.text.clone(),
@@ -445,13 +553,27 @@ impl PinyinEngine {
         let remaining = &self.segments[offset..];
         let seg_count = self.find_seg_count_for_word(&text, remaining);
 
+        // 学习: 选中即计数 + 上下文 bigram(前词=上次选中/上屏词)
+        let word_key: String = remaining[..seg_count].concat();
+        let word_segs: Vec<String> = remaining[..seg_count].to_vec();
+        self.bigram.bump(self.last_context.as_deref(), &text);
+        self.learn_word(&word_key, &text, &word_segs);
+        self.last_context = Some(text.clone());
+
         self.selected_words.push(text);
         self.selected_seg_counts.push(seg_count);
 
         // If all syllables consumed, commit the full sentence
-        // (学习逻辑由 Task 4 的计数制 learn_word/learn_phrase 接入)
         if self.total_selected_segs() >= self.segments.len() {
             let sentence: String = self.selected_words.concat();
+            let all_segs = self.segments.clone();
+            if self.selected_words.len() > 1 {
+                self.learn_phrase(&sentence, &all_segs);
+            }
+            if self.userdb_dirty {
+                self.save_userdb();
+                self.userdb_dirty = false;
+            }
             self.clear_composition();
             return vec![EngineAction::Commit(sentence)];
         }
@@ -690,6 +812,7 @@ impl Engine for PinyinEngine {
                 return vec![EngineAction::Forward];
             }
             self.clear_composition();
+            self.last_context = None; // 放弃当前输入流,上下文作废
             return vec![
                 EngineAction::UpdatePreedit(String::new()),
                 EngineAction::UpdateCandidates(Vec::new()),
@@ -818,6 +941,7 @@ impl Engine for PinyinEngine {
 
     fn reset(&mut self) {
         self.clear_composition();
+        self.last_context = None; // FocusOut/Reset: 焦点丢失,上下文作废
     }
 }
 
@@ -1314,6 +1438,44 @@ mod tests {
     }
 
     #[test]
+    fn corrupted_t_field_skipped_not_migrated() {
+        let mut engine = PinyinEngine::from_file(TEST_BASE).unwrap();
+        // c= 合法但 t= 存在且不可解析 → 损坏行: 跳过且不计迁移,
+        // 不得误入 legacy 分支把计数收缩成 1/2
+        let migrated = engine.parse_userdb("ceshi\t测释\tc=5 t=abc\n");
+        assert_eq!(migrated, 0);
+        assert_ne!(engine.table.get("ceshi").map(|v| v.iter().any(|e| e.word == "测释")),
+            Some(true), "损坏行不应入库");
+    }
+
+    #[test]
+    fn bigram_persists_across_restart() {
+        let dir = std::env::temp_dir().join(format!("feibai-bigram-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ud = dir.join("user.dict.txt");
+        let bg = dir.join("user.bigram.txt");
+        let _ = std::fs::remove_file(&ud); let _ = std::fs::remove_file(&bg);
+
+        // 会话 1: 两次 "我…把" 共现 → 落盘
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        engine.set_userdb_path(&ud);
+        for _ in 0..2 {
+            for c in "wo".chars() { press_key(&mut engine, c); }
+            let idx = engine.candidates.iter().position(|c| c.text == "我").unwrap();
+            press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+            for c in "ba".chars() { press_key(&mut engine, c); }
+            let idx = engine.candidates.iter().position(|c| c.text == "把").unwrap();
+            press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        }
+        assert!(bg.exists(), "commit 后应写出 bigram 文件");
+        // 会话 2: 重启加载,上下文延续
+        let mut engine2 = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        engine2.load_userdb(&ud).unwrap();
+        assert_eq!(engine2.bigram.count("我", "把"), 2, "重启后 bigram 计数应保留");
+        let _ = std::fs::remove_file(&ud); let _ = std::fs::remove_file(&bg);
+    }
+
+    #[test]
     fn test_existing_promotion_unaffected_by_changes() {
         // Regression guard: the existing single-char promotion (又 over 有/由) must
         // still overtake after 2 selections with the new base_weight/tie-break.
@@ -1328,5 +1490,95 @@ mod tests {
         for c in "you".chars() { press_key(&mut engine, c); }
         assert_eq!(engine.candidates[0].text, "又",
             "又 should still rank #1 after 2 selections (promotion unaffected)");
+    }
+
+    #[test]
+    fn ba_ba_oscillation_is_gone() {
+        // 复现日志里的真实场景: 把/吧 都常用(吧 191 次 vs 把 76 次)
+        // 旧代码: 每次选中 ±1 翻转,谁在 #1 抛硬币;新机制: 吧 稳定 #1
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        let type_ba = |eng: &mut PinyinEngine| {
+            for c in "ba".chars() { press_key(eng, c); }
+        };
+        // 学习期: 选 1 次把, 3 次吧
+        for pick in ["把", "吧", "吧", "吧"] {
+            type_ba(&mut engine);
+            let idx = engine.candidates.iter().position(|c| c.text == pick).unwrap();
+            let d = char::from_digit((idx + 1) as u32, 10).unwrap();
+            press_key(&mut engine, d);
+        }
+        // 验证期: 再选一次 把 (旧代码此处会把把顶到#1)
+        type_ba(&mut engine);
+        let idx = engine.candidates.iter().position(|c| c.text == "把").unwrap();
+        press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        // 吧 的选中次数(4) > 把(2) → 吧 必须 #1, 不因把被选而翻转
+        type_ba(&mut engine);
+        assert_eq!(engine.candidates[0].text, "吧", "吧 count=4 应稳定 #1");
+    }
+
+    #[test]
+    fn context_bigram_promotes_expected_next_word() {
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        // 连续两次 "我..把" 共现后, 组词中选中"我"再输入 ba, "把"应被上下文加成
+        for _ in 0..2 {
+            for c in "wo".chars() { press_key(&mut engine, c); }
+            let idx = engine.candidates.iter().position(|c| c.text == "我").unwrap();
+            press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+            for c in "ba".chars() { press_key(&mut engine, c); }
+            let idx = engine.candidates.iter().position(|c| c.text == "把").unwrap();
+            press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        }
+        // 同一组合词流: 我 → ba, "把"应在 "吧" 之前(即使 吧 计数更高)
+        for c in "wo".chars() { press_key(&mut engine, c); }
+        let idx = engine.candidates.iter().position(|c| c.text == "我").unwrap();
+        press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        for c in "ba".chars() { press_key(&mut engine, c); }
+        let ba_idx = engine.candidates.iter().position(|c| c.text == "把").unwrap();
+        let ba_zui = engine.candidates.iter().position(|c| c.text == "吧").unwrap();
+        assert!(ba_idx < ba_zui, "上下文 我→把 应让 把 排在 吧 前");
+    }
+
+    #[test]
+    fn userdb_save_writes_new_format_from_memory() {
+        let dir = std::env::temp_dir().join(format!("feibai-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ud = dir.join("user.dict.txt");
+        let bg = dir.join("user.bigram.txt");
+        let _ = std::fs::remove_file(&ud); let _ = std::fs::remove_file(&bg);
+
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        engine.set_userdb_path(&ud);
+        for c in "ba".chars() { press_key(&mut engine, c); }
+        press_key(&mut engine, '1'); // 选第一个候选并 commit → 触发保存
+        let content = std::fs::read_to_string(&ud).unwrap();
+        assert!(content.contains("\t把\tc=1 t=") || content.contains("\t吧\tc=1 t=") || content.contains("\t拔\tc=1 t="),
+            "应写入 c=次数 t=周 新格式: {content}");
+        let bigram_content = std::fs::read_to_string(&bg).unwrap();
+        assert!(bigram_content.is_empty(), "单字 commit 无前词, bigram 应为空");
+        let _ = std::fs::remove_file(&ud); let _ = std::fs::remove_file(&bg);
+    }
+
+    #[test]
+    fn legacy_backup_created_once_and_idempotent() {
+        let dir = std::env::temp_dir().join(format!("feibai-bak-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ud = dir.join("user.dict.txt");
+        std::fs::write(&ud, "jiu\t旧\tc=273122\n").unwrap();
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE]).unwrap();
+        engine.load_userdb(&ud).unwrap();
+        let bak = dir.join("user.dict.txt.legacy-bak");
+        assert!(bak.exists(), "legacy 行应触发备份");
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "jiu\t旧\tc=273122\n");
+        // 二次加载不覆盖已有备份
+        let mut engine2 = PinyinEngine::from_files(&[TEST_BASE]).unwrap();
+        engine2.load_userdb(&ud).unwrap();
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "jiu\t旧\tc=273122\n");
+        // 纯新格式不触发备份
+        std::fs::write(&ud, "jiu\t旧\tc=3 t=100\n").unwrap();
+        std::fs::remove_file(&bak).unwrap();
+        let mut engine3 = PinyinEngine::from_files(&[TEST_BASE]).unwrap();
+        engine3.load_userdb(&ud).unwrap();
+        assert!(!bak.exists(), "新格式行不应触发备份");
+        let _ = std::fs::remove_file(&ud); let _ = std::fs::remove_file(&bak);
     }
 }

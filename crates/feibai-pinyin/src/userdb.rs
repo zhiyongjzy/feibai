@@ -2,6 +2,8 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::Path;
 
+use feibai_core::log_error;
+
 /// 词条: 静态 base 词频 + 用户选中计数。用户信号是"次数",不是绝对权重——
 /// 绝对权重会覆盖并抹平 base 词库的组内排序(band 坍缩,见 2026-09 日志分析)。
 #[derive(Debug, Clone)]
@@ -94,25 +96,29 @@ impl UserBigram {
         (top as f64 * (c as f64 / (c as f64 + 2.0))).round() as u64
     }
 
-    pub fn load(path: &Path) -> Self {
+    /// NotFound 视为空(首启无文件),存在但不可读为 Err(防误覆盖已有数据)
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(format!("failed to read {}: {e}", path.display())),
+        };
         let mut bg = Self::default();
-        if let Ok(content) = std::fs::read_to_string(path) {
-            for line in content.lines() {
-                if line.starts_with('#') || line.trim().is_empty() {
-                    continue;
-                }
-                let mut parts = line.splitn(3, '\t');
-                let (Some(p), Some(c), Some(n)) = (parts.next(), parts.next(), parts.next())
-                else {
-                    continue;
-                };
-                let count = n.strip_prefix("c=").and_then(|v| v.parse().ok()).unwrap_or(0);
-                if count > 0 {
-                    bg.map.insert((p.to_string(), c.to_string()), count);
-                }
+        for line in content.lines() {
+            if line.starts_with('#') || line.trim().is_empty() {
+                continue;
+            }
+            let mut parts = line.splitn(3, '\t');
+            let (Some(p), Some(c), Some(n)) = (parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            let count = n.strip_prefix("c=").and_then(|v| v.parse().ok()).unwrap_or(0);
+            if count > 0 {
+                bg.map.insert((p.to_string(), c.to_string()), count);
             }
         }
-        bg
+        Ok(bg)
     }
 
     pub fn save(&self, path: &Path) {
@@ -122,9 +128,16 @@ impl UserBigram {
             .map(|((p, c), n)| format!("{}\t{}\tc={}", p, c, n))
             .collect();
         lines.sort(); // HashMap 迭代序不定,排序保证文件 diff 稳定
+        // 空表写 0 字节文件(而非孤零零一个换行),调用方据此识别"无记录"
+        let content = if lines.is_empty() { String::new() } else { lines.join("\n") + "\n" };
         let tmp = path.with_extension("txt.tmp");
-        if std::fs::write(&tmp, lines.join("\n") + "\n").is_ok() {
-            let _ = std::fs::rename(&tmp, path);
+        if let Err(e) = std::fs::write(&tmp, content) {
+            log_error!("failed to write {}: {e}", tmp.display());
+            return;
+        }
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            log_error!("failed to rename {} -> {}: {e}", tmp.display(), path.display());
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 }
@@ -206,6 +219,13 @@ mod tests {
     }
 
     #[test]
+    fn bigram_self_pair_skipped() {
+        let mut bg = UserBigram::default();
+        bg.bump(Some("把"), "把");
+        assert_eq!(bg.count("把", "把"), 0);
+    }
+
+    #[test]
     fn bigram_boost_saturates() {
         let mut bg = UserBigram::default();
         assert_eq!(bg.boost("我", "把", 108066), 0); // 无共现无加成
@@ -229,7 +249,7 @@ mod tests {
         bg.bump(Some("我"), "把");
         bg.bump(Some("好"), "吧");
         bg.save(&path);
-        let loaded = UserBigram::load(&path);
+        let loaded = UserBigram::load(&path).unwrap();
         assert_eq!(loaded.count("我", "把"), 2);
         assert_eq!(loaded.count("好", "吧"), 1);
         let _ = std::fs::remove_file(&path);
@@ -237,7 +257,7 @@ mod tests {
 
     #[test]
     fn bigram_load_missing_file_is_empty() {
-        let bg = UserBigram::load(std::path::Path::new("/nonexistent/feibai/x.txt"));
+        let bg = UserBigram::load(std::path::Path::new("/nonexistent/feibai/x.txt")).unwrap();
         assert_eq!(bg.count("我", "把"), 0);
     }
 }
