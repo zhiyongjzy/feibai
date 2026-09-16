@@ -1,4 +1,6 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::path::Path;
 
 /// 词条: 静态 base 词频 + 用户选中计数。用户信号是"次数",不是绝对权重——
 /// 绝对权重会覆盖并抹平 base 词库的组内排序(band 坍缩,见 2026-09 日志分析)。
@@ -57,6 +59,74 @@ pub fn cmp_ranked(a: &DictEntry, b: &DictEntry, top: u64, now: u32) -> Ordering 
         .then_with(|| b.base_weight.cmp(&a.base_weight))
         .then_with(|| b.word.chars().count().cmp(&a.word.chars().count()))
         .then_with(|| b.word.cmp(&a.word))
+}
+
+/// 用户 bigram: (前词, 当前词) 共现计数, 参与 lookup 排序的上下文加成。
+/// 灵感来自 libime HistoryBigram(用户历史 bigram 与 base LM 插值)。
+#[derive(Default)]
+pub struct UserBigram {
+    map: HashMap<(String, String), u32>,
+}
+
+impl UserBigram {
+    pub fn bump(&mut self, prev: Option<&str>, cur: &str) {
+        if let Some(p) = prev {
+            if p != cur {
+                *self.map.entry((p.to_string(), cur.to_string())).or_insert(0) += 1;
+            }
+        }
+    }
+
+    pub fn count(&self, prev: &str, cur: &str) -> u32 {
+        self.map
+            .get(&(prev.to_string(), cur.to_string()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// 上下文加成,与 entry_score 同量纲: 饱和函数 c/(c+2),
+    /// c=1 → top/3 (足以翻转 #1/#2 的计数分差), c→∞ → 趋近 top。
+    pub fn boost(&self, prev: &str, cur: &str, top: u64) -> u64 {
+        let c = self.count(prev, cur);
+        if c == 0 {
+            return 0;
+        }
+        (top as f64 * (c as f64 / (c as f64 + 2.0))).round() as u64
+    }
+
+    pub fn load(path: &Path) -> Self {
+        let mut bg = Self::default();
+        if let Ok(content) = std::fs::read_to_string(path) {
+            for line in content.lines() {
+                if line.starts_with('#') || line.trim().is_empty() {
+                    continue;
+                }
+                let mut parts = line.splitn(3, '\t');
+                let (Some(p), Some(c), Some(n)) = (parts.next(), parts.next(), parts.next())
+                else {
+                    continue;
+                };
+                let count = n.strip_prefix("c=").and_then(|v| v.parse().ok()).unwrap_or(0);
+                if count > 0 {
+                    bg.map.insert((p.to_string(), c.to_string()), count);
+                }
+            }
+        }
+        bg
+    }
+
+    pub fn save(&self, path: &Path) {
+        let mut lines: Vec<String> = self
+            .map
+            .iter()
+            .map(|((p, c), n)| format!("{}\t{}\tc={}", p, c, n))
+            .collect();
+        lines.sort(); // HashMap 迭代序不定,排序保证文件 diff 稳定
+        let tmp = path.with_extension("txt.tmp");
+        if std::fs::write(&tmp, lines.join("\n") + "\n").is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -121,5 +191,53 @@ mod tests {
         // 同分不同词: 排序必须确定且反对称(不要求 Equal——字不同则字典序分高下)
         assert_eq!(cmp_ranked(&a, &b, top, now), cmp_ranked(&a, &b, top, now));
         assert_eq!(cmp_ranked(&a, &b, top, now), cmp_ranked(&b, &a, top, now).reverse());
+    }
+
+    #[test]
+    fn bigram_bump_and_count() {
+        let mut bg = UserBigram::default();
+        bg.bump(Some("我"), "把");
+        bg.bump(Some("我"), "把");
+        bg.bump(Some("我"), "吧");
+        bg.bump(None, "吧"); // 无上文不记
+        assert_eq!(bg.count("我", "把"), 2);
+        assert_eq!(bg.count("我", "吧"), 1);
+        assert_eq!(bg.count("我", "在"), 0);
+    }
+
+    #[test]
+    fn bigram_boost_saturates() {
+        let mut bg = UserBigram::default();
+        assert_eq!(bg.boost("我", "把", 108066), 0); // 无共现无加成
+        bg.bump(Some("我"), "把");
+        let b1 = bg.boost("我", "把", 108066);
+        // c=1 → 恰为 top/3 (108066/3 整除), 断言"不越 top/3"须用 <=
+        assert!(b1 > 0 && b1 <= 108066 / 3);
+        for _ in 0..20 { bg.bump(Some("我"), "把"); }
+        let b21 = bg.boost("我", "把", 108066);
+        assert!(b21 > 108066 * 3 / 4 && b21 <= 108066); // 饱和但不越 key_top
+    }
+
+    #[test]
+    fn bigram_save_load_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("feibai-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("user.bigram.txt");
+        let _ = std::fs::remove_file(&path);
+        let mut bg = UserBigram::default();
+        bg.bump(Some("我"), "把");
+        bg.bump(Some("我"), "把");
+        bg.bump(Some("好"), "吧");
+        bg.save(&path);
+        let loaded = UserBigram::load(&path);
+        assert_eq!(loaded.count("我", "把"), 2);
+        assert_eq!(loaded.count("好", "吧"), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn bigram_load_missing_file_is_empty() {
+        let bg = UserBigram::load(std::path::Path::new("/nonexistent/feibai/x.txt"));
+        assert_eq!(bg.count("我", "把"), 0);
     }
 }
