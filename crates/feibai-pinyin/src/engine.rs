@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use feibai_core::*;
 
-use crate::userdb::{DictEntry, UserBigram, key_top, now_week};
+use crate::userdb::{DictEntry, UserBigram, cmp_ranked, entry_score, key_top, now_week};
 
 const PAGE_SIZE: usize = 9;
 
@@ -293,12 +293,24 @@ impl PinyinEngine {
             self.candidates.push(Candidate { text: s.clone(), comment: None });
         }
 
-        // Exact match candidates for complete syllable spans
+        // Exact match candidates for complete syllable spans.
+        // 排序键 = 计数 score + 上下文 bigram 加成; 先捕获 bigram/ctx 的借用,
+        // 排序辅助 rank_key 为自由函数, 避免与 table 迭代的整体 &self 借用冲突
+        let now = now_week();
+        let ctx: Option<String> = self.last_context.clone();
+        let bigram = &self.bigram;
         let exact_end = if last_is_incomplete { n - 1 } else { n };
         for end in (1..=exact_end.min(8)).rev() {
             let key: String = remaining[..end].concat();
             if let Some(entries) = self.table.get(&key) {
-                for e in entries.iter() {
+                let top = key_top(entries);
+                let mut ranked: Vec<&DictEntry> = entries.iter().collect();
+                ranked.sort_by(|a, b| {
+                    rank_key(bigram, b, top, now, ctx.as_deref())
+                        .cmp(&rank_key(bigram, a, top, now, ctx.as_deref()))
+                        .then_with(|| cmp_ranked(a, b, top, now))
+                });
+                for e in ranked {
                     if seen.insert(e.word.clone()) {
                         self.candidates.push(Candidate {
                             text: e.word.clone(),
@@ -309,17 +321,26 @@ impl PinyinEngine {
             }
         }
 
-        // Prefix matching for trailing incomplete syllable (using BTreeMap range)
+        // Prefix matching for trailing incomplete syllable (using BTreeMap range).
+        // 条目来自多个 key, 各自带所属 key 的 top 参与排序。
+        // 前缀范围可达数万条(z 前缀 ~2.8 万), rank_key 含 bigram 查表,
+        // 排序闭包内逐次计算会放大到 O(n log n) 次 —— 先算好分再排序, 顺序不变
         if last_is_incomplete {
             let prefix: String = remaining.concat();
             let prefix_end = prefix_upper_bound(&prefix);
-            let mut prefix_entries: Vec<&DictEntry> = self.table
+            let mut prefix_entries: Vec<(u64, &DictEntry, u64)> = self.table
                 .range(prefix.clone()..prefix_end)
                 .filter(|(k, _)| k.as_str() != prefix)
-                .flat_map(|(_, entries)| entries.iter())
+                .flat_map(|(_, entries)| {
+                    let top = key_top(entries);
+                    entries.iter().map(move |e| (e, top))
+                })
+                .map(|(e, top)| (rank_key(bigram, e, top, now, ctx.as_deref()), e, top))
                 .collect();
-            prefix_entries.sort_by(|a, b| b.base_weight.cmp(&a.base_weight));
-            for e in prefix_entries.iter().take(50) {
+            prefix_entries.sort_by(|(ra, a, ta), (rb, b, _tb)| {
+                rb.cmp(ra).then_with(|| cmp_ranked(a, b, *ta, now))
+            });
+            for (_, e, _) in prefix_entries.iter().take(50) {
                 if seen.insert(e.word.clone()) {
                     self.candidates.push(Candidate {
                         text: e.word.clone(),
@@ -331,13 +352,19 @@ impl PinyinEngine {
             // Also try prefix on just the incomplete segment alone (single char candidates)
             if n == 1 || self.candidates.is_empty() {
                 let seg_end = prefix_upper_bound(last_seg);
-                let mut single_prefix_entries: Vec<&DictEntry> = self.table
+                let mut single_prefix_entries: Vec<(u64, &DictEntry, u64)> = self.table
                     .range(last_seg.clone()..seg_end)
                     .filter(|(k, _)| k.len() <= 6)
-                    .flat_map(|(_, entries)| entries.iter())
+                    .flat_map(|(_, entries)| {
+                        let top = key_top(entries);
+                        entries.iter().map(move |e| (e, top))
+                    })
+                    .map(|(e, top)| (rank_key(bigram, e, top, now, ctx.as_deref()), e, top))
                     .collect();
-                single_prefix_entries.sort_by(|a, b| b.base_weight.cmp(&a.base_weight));
-                for e in single_prefix_entries.iter().take(50) {
+                single_prefix_entries.sort_by(|(ra, a, ta), (rb, b, _tb)| {
+                    rb.cmp(ra).then_with(|| cmp_ranked(a, b, *ta, now))
+                });
+                for (_, e, _) in single_prefix_entries.iter().take(50) {
                     if seen.insert(e.word.clone()) {
                         self.candidates.push(Candidate {
                             text: e.word.clone(),
@@ -388,6 +415,7 @@ impl PinyinEngine {
 
         dp_score[0] = 0.0;
         dp_words[0] = 0;
+        let now = now_week();
 
         for i in 0..n {
             if dp_score[i] == f64::NEG_INFINITY {
@@ -397,7 +425,10 @@ impl PinyinEngine {
             for len in 1..=max_len {
                 let key: String = segs[i..i + len].concat();
                 if let Some(entries) = self.table.get(&key) {
-                    if let Some(best) = entries.first() {
+                    // Task 3 起表内是插入序, first() 不再是最优 —— 按 cmp_ranked 取最优;
+                    // DP 词分仍用 base_weight(排序位次与词分解耦)
+                    let top = key_top(entries);
+                    if let Some(best) = entries.iter().max_by(|a, b| cmp_ranked(a, b, top, now)) {
                         let word_score = (best.base_weight.max(1) as f64).ln();
                         let new_score = dp_score[i] + word_score;
                         let new_words = dp_words[i] + 1;
@@ -727,6 +758,23 @@ fn prefix_upper_bound(prefix: &str) -> String {
         bytes.pop();
     }
     format!("{}~", prefix)
+}
+
+/// 排序键: score + 上下文 bigram 加成(与 score 同量纲)。
+/// 自由函数而非 &self 方法 —— lookup 内迭代 self.table 的同时借用 self.bigram,
+/// 挂在 &self 上会整体借用 self 产生借用冲突
+fn rank_key(
+    bigram: &UserBigram,
+    e: &DictEntry,
+    top: u64,
+    now: u32,
+    ctx: Option<&str>,
+) -> u64 {
+    let base = entry_score(e, top, now);
+    match ctx {
+        Some(prev) => base.saturating_add(bigram.boost(prev, &e.word, top)),
+        None => base,
+    }
 }
 
 const PINYIN_SYLLABLES: &[&str] = &[
@@ -1539,15 +1587,22 @@ mod tests {
         type_ba(&mut engine);
         let idx = engine.candidates.iter().position(|c| c.text == "把").unwrap();
         press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
-        // 吧 的选中次数(4) > 把(2) → 吧 必须 #1, 不因把被选而翻转
+        // 吧 的选中次数(3) > 把(2) → 吧 必须 #1, 不因把被选而翻转
         type_ba(&mut engine);
-        assert_eq!(engine.candidates[0].text, "吧", "吧 count=4 应稳定 #1");
+        assert_eq!(engine.candidates[0].text, "吧", "吧 count=3 应稳定 #1");
     }
 
     #[test]
     fn context_bigram_promotes_expected_next_word() {
         let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
-        // 连续两次 "我..把" 共现后, 组词中选中"我"再输入 ba, "把"应被上下文加成
+        // 预学 吧 到 c=4 (score=top+4), 高于 把 学到 c=2 的 score(top+1):
+        // 无 bigram 加成时 吧 必然在前 —— 把 的登顶只能来自 上下文加成
+        for _ in 0..4 {
+            for c in "ba".chars() { press_key(&mut engine, c); }
+            let idx = engine.candidates.iter().position(|c| c.text == "吧").unwrap();
+            press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
+        }
+        // 连续两次 "我..把" 共现 → bigram (我,把)=2
         for _ in 0..2 {
             for c in "wo".chars() { press_key(&mut engine, c); }
             let idx = engine.candidates.iter().position(|c| c.text == "我").unwrap();
@@ -1556,14 +1611,54 @@ mod tests {
             let idx = engine.candidates.iter().position(|c| c.text == "把").unwrap();
             press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
         }
-        // 同一组合词流: 我 → ba, "把"应在 "吧" 之前(即使 吧 计数更高)
+        // 同一组合词流: 我 → ba, "把"应靠 bigram 加成压过 count 更高的 吧
         for c in "wo".chars() { press_key(&mut engine, c); }
         let idx = engine.candidates.iter().position(|c| c.text == "我").unwrap();
         press_key(&mut engine, char::from_digit((idx + 1) as u32, 10).unwrap());
         for c in "ba".chars() { press_key(&mut engine, c); }
+        assert_eq!(engine.candidates[0].text, "把",
+            "上下文 我→把 应让 把 登顶(压过 count=4 的 吧): {:?}",
+            engine.candidates.iter().take(3).map(|c| c.text.as_str()).collect::<Vec<_>>());
         let ba_idx = engine.candidates.iter().position(|c| c.text == "把").unwrap();
         let ba_zui = engine.candidates.iter().position(|c| c.text == "吧").unwrap();
         assert!(ba_idx < ba_zui, "上下文 我→把 应让 把 排在 吧 前");
+    }
+
+    #[test]
+    fn single_letter_prefix_not_dominated_by_learned_fragment() {
+        // 迁移日志中的真实案例: 造词"着不合适"曾被学到 1M 权重,污染每个 z 前缀面板 4920 次
+        // 新机制: 造词 count<2 沉底;即便 count=2,也只在其自身 key("zhebuheshi"全拼)内登顶,
+        // 对 "z" 前缀面板的贡献仍按 score 排序,长造词不再霸占首位。
+        // 这里测可复现的最小行为: 未选稳的造词(count=1)不会出现在任何前缀面板前部
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        let this_week = crate::userdb::now_week();
+        engine.parse_userdb(&format!("zhe bu he shi\t着不合适\tc=1 t={this_week}\n")); // count=1 本周,走沉底路径而非衰减路径
+        for c in "z".chars() { press_key(&mut engine, c); }
+        // 首候选必须是正常单字(在/再/这/做…),不能是"着不合适"。
+        // (brief 原断言 assert_ne!(chars().count(), 5) 是笔误: 造词是 4 字,
+        //  即使它霸占首位该断言也会通过 —— 改为直接点名造词)
+        assert_ne!(engine.candidates[0].text, "着不合适",
+            "count=1 的造词不得占据 z 前缀首位: {:?}", engine.candidates[0]);
+        let first_page: Vec<&str> =
+            engine.candidates.iter().take(9).map(|c| c.text.as_str()).collect();
+        assert!(!first_page.contains(&"着不合适"),
+            "count=1 的造词不得出现在 z 前缀第一页: {first_page:?}");
+    }
+
+    #[test]
+    fn prefix_panel_ranks_by_learned_score() {
+        // 前缀路径(仅输入 z)同样按 score 排序: 本周 c=8 的 再
+        // score = key_top(zai)-1 + 2*log2(8) = 727920, 须越过裸 weight 更高的 在(727915)登顶。
+        // 旧实现按裸 base_weight 排序, 在 恒为 #1 —— 锁定 score 排序行为。
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        let this_week = crate::userdb::now_week();
+        engine.parse_userdb(&format!("zai\t再\tc=8 t={this_week}\n"));
+        for c in "z".chars() { press_key(&mut engine, c); }
+        assert_eq!(engine.candidates[0].text, "再",
+            "z 前缀面板应按 score 排序, 再(c=8) 须登顶: {:?}",
+            engine.candidates.iter().take(3).map(|c| c.text.as_str()).collect::<Vec<_>>());
+        assert_eq!(engine.candidates[1].text, "在",
+            "在 是裸 weight 最高的 z 前缀词, 应紧随其后");
     }
 
     #[test]
@@ -1610,3 +1705,4 @@ mod tests {
         let _ = std::fs::remove_file(&ud); let _ = std::fs::remove_file(&bak);
     }
 }
+
