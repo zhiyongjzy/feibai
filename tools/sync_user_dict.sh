@@ -17,6 +17,8 @@
 # 引擎重启后 user.dict.txt 会自动迁移成新格式) → log2 曲线映射到 extra 区间
 # [10000, 49000]: 次数每翻倍约 +6500, c≥64 封顶 49000 (仍低于 extra 头词的 50000),
 # 保留相对排序, 不挤掉内置高频词。
+#   跳过两类行 (与引擎迁移规则对齐): 旧格式 c≥1000000 (0.1.1 前误学脏数据,
+#   引擎迁移直接丢弃, 不得导出进共享词库); t= 值不可解析的损坏行。
 #
 # 拼音列: 统一输出连写形式 (与新格式 user.dict.txt 的拼音列一致; engine 的
 # parse_rime_dict 对连写/空格分隔拼音均兼容), 旧格式行的空格分隔拼音先归一化。
@@ -134,23 +136,35 @@ for line in open(user_dict, encoding='utf-8'):
         filtered['title'].append(word)
         continue
 
-    # 提取 c= 计数 (双格式):
+    # 提取 c= 计数 (双格式, 跳过规则与引擎 parse_userdb 迁移逻辑对齐):
     #   新格式 "c=N t=W" → count=N
     #   旧格式 "c=M" (无 t=, 绝对权重) → count=1 (过渡兼容, 引擎重启后文件自动迁移)
-    count = None
+    #   跳过: t= 存在但不可解析 (损坏行); 旧格式 c≥1000000 (0.1.1 前误学脏数据)
+    raw_c = None
+    week = None
     has_t = False
     for tok in meta.split():
         if tok.startswith('c='):
             try:
-                count = int(tok[2:])
+                raw_c = int(tok[2:])
             except ValueError:
                 pass
         elif tok.startswith('t='):
             has_t = True
-    if count is None:
+            try:
+                week = int(tok[2:])
+            except ValueError:
+                week = None  # 多个 t= 时后者覆盖前者, 与引擎一致
+    if raw_c is None:
         continue  # 无有效 c= 字段, 跳过
+    if has_t and week is None:
+        continue  # 损坏行 (t= 不可解析): 与引擎一致跳过
     if not has_t:
+        if raw_c >= 1_000_000:
+            continue  # 0.1.1 前误学脏数据: 引擎迁移丢弃, 不入共享词库
         count = 1
+    else:
+        count = raw_c
     if count < 1:
         count = 1  # c=0/负数防御: log2 需要 ≥1
     key = (word, pinyin)
