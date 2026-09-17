@@ -811,7 +811,7 @@ fn rank_key(
 ) -> u64 {
     let base = entry_score(e, top, now);
     match ctx {
-        Some(prev) => base.saturating_add(bigram.boost(prev, &e.word, top)),
+        Some(prev) => base.saturating_add(bigram.boost(prev, &e.word)),
         None => base,
     }
 }

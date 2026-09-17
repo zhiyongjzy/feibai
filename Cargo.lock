@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "feibai"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-io",
  "async-lock",
@@ -466,21 +466,21 @@ dependencies = [
 
 [[package]]
 name = "feibai-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "feibai-pinyin"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "feibai-core",
 ]
 
 [[package]]
 name = "feibai-ui"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "cosmic-text",
  "feibai-core",

@@ -16,6 +16,11 @@ pub struct DictEntry {
 
 /// 造词在两次选中前的沉底权重(误学碎片防护,沿用 0.1.1 语义)
 pub const NEW_WORD_BASE: u64 = 10;
+/// 上下文(bigram)加成的上限(分)。组内计数分跨度约 0~40
+/// (count 1→1e6 经 2·log2 压缩), 上限 12 表示上下文最多能翻约 8 倍用量差。
+pub const CTX_BOOST_MAX: u64 = 12;
+/// 上下文加成的回退系数: 共现次数 c 的权重为 c/(c+K), 低计数不可靠故衰减。
+pub const CTX_BOOST_K: f64 = 2.0;
 /// 每周衰减因子(约 4 周半衰,对齐 Google 拼音 4 周掉 80% 的粒度)
 pub const WEEKLY_DECAY: f64 = 0.85;
 /// 计数每翻一倍在 key_top 之上的加分
@@ -98,14 +103,21 @@ impl UserBigram {
             .unwrap_or(0)
     }
 
-    /// 上下文加成,与 entry_score 同量纲: 饱和函数 c/(c+2),
-    /// c=1 → top/3 (足以翻转 #1/#2 的计数分差), c→∞ → 趋近 top。
-    pub fn boost(&self, prev: &str, cur: &str, top: u64) -> u64 {
+    /// 上下文加成(分)。上限与"组内计数分跨度"同量级, 不随 key_top 缩放 ——
+    /// 这是 2026-09-17 生产事故的修复: 旧实现 boost = key_top·c/(c+2) 在
+    /// key_top≈10 万时一次共现就给 36022 分, 而组内计数分跨度只有约 0~40,
+    /// 结果上下文完全压倒计数证据(吧 33 次/把 20 次也会被一次共现掀翻),
+    /// 且加成被自身推荐的结果反复喂大, 形成自我强化环路。
+    ///
+    /// 现按 Jelinek-Mercer 平滑的直觉: 低共现次数不可靠, 权重按 c/(c+K) 回退;
+    /// 上限取 12 ≈ 计数差 8 倍的跨度 —— 近似平局时上下文能做倾向性调整,
+    /// 但翻不动明显的使用习惯差异。
+    pub fn boost(&self, prev: &str, cur: &str) -> u64 {
         let c = self.count(prev, cur);
         if c == 0 {
             return 0;
         }
-        (top as f64 * (c as f64 / (c as f64 + 2.0))).round() as u64
+        (CTX_BOOST_MAX as f64 * (c as f64 / (c as f64 + CTX_BOOST_K))).round() as u64
     }
 
     /// NotFound 视为空(首启无文件),存在但不可读为 Err(防误覆盖已有数据)
@@ -258,16 +270,60 @@ mod tests {
     }
 
     #[test]
-    fn bigram_boost_saturates() {
+    fn bigram_boost_is_bounded_and_backs_off_at_low_counts() {
         let mut bg = UserBigram::default();
-        assert_eq!(bg.boost("我", "把", 108066), 0); // 无共现无加成
+        assert_eq!(bg.boost("我", "把"), 0); // 无共现无加成
+
+        // 低共现不可靠 → 回退: c=1 的加成须远小于上限
         bg.bump(Some("我"), "把");
-        let b1 = bg.boost("我", "把", 108066);
-        // c=1 → 恰为 top/3 (108066/3 整除), 断言"不越 top/3"须用 <=
-        assert!(b1 > 0 && b1 <= 108066 / 3);
-        for _ in 0..20 { bg.bump(Some("我"), "把"); }
-        let b21 = bg.boost("我", "把", 108066);
-        assert!(b21 > 108066 * 3 / 4 && b21 <= 108066); // 饱和但不越 key_top
+        let b1 = bg.boost("我", "把");
+        assert!(b1 > 0 && b1 <= CTX_BOOST_MAX / 2, "c=1 应显著回退: {b1}");
+
+        for _ in 0..19 {
+            bg.bump(Some("我"), "把");
+        } // c=20
+        let b20 = bg.boost("我", "把");
+        assert!(b20 > b1 * 2, "c=20 加成应明显强于 c=1: {b20} vs {b1}");
+        assert!(b20 <= CTX_BOOST_MAX, "不得越上限: {b20}");
+    }
+
+    /// 回归(生产 2026-09-17): 上下文加成必须与组内计数分跨度同量级。
+    /// 旧实现按 key_top(≈10 万) 缩放, 一次共现给 36022 分而计数分跨度仅 ~40,
+    /// 导致 吧(33 次)/把(20 次) 每次选完就翻转, 计数体系形同虚设。
+    #[test]
+    fn context_tips_near_ties_but_not_large_count_gaps() {
+        let top = 108066;
+        let now = 100;
+        let mut bg = UserBigram::default();
+        for _ in 0..12 {
+            bg.bump(Some("我"), "把");
+        } // c=12
+
+        // 近似平局 吧(33) vs 把(20): 计数仅差 1 分 → 上下文应能翻盘
+        let zui = e("吧", 25526, 33, now);
+        let ba = e("把", 108066, 20, now);
+        let (s_zui, s_ba) = (entry_score(&zui, top, now), entry_score(&ba, top, now));
+        assert!(s_zui > s_ba, "纯计数: 吧 领先 ({s_zui} vs {s_ba})");
+        assert!(
+            s_ba + bg.boost("我", "把") > s_zui,
+            "上下文应能翻转近似平局: {} + {} vs {}",
+            s_ba,
+            bg.boost("我", "把"),
+            s_zui
+        );
+
+        // 明显差异 常用(1000 次) vs 冷门(1 次): 计数差 20 分 → 上下文不得推翻
+        let hot = e("把", 108066, 1000, now);
+        let cold = e("吧", 25526, 1, now);
+        let (s_hot, s_cold) = (entry_score(&hot, top, now), entry_score(&cold, top, now));
+        assert!(s_hot > s_cold, "纯计数: 常用词领先");
+        assert!(
+            s_cold + bg.boost("我", "把") < s_hot,
+            "上下文不得推翻明显用量差异: {} + {} vs {}",
+            s_cold,
+            bg.boost("我", "把"),
+            s_hot
+        );
     }
 
     #[test]
