@@ -3,7 +3,7 @@
 # 来源：人工整理，MIT 协议
 ---
 name: feibai.extra
-version: "2026-05-21"
+version: "2026-09-17"
 sort: by_weight
 columns:
   - text
@@ -3164,3 +3164,77 @@ emo	e m o	5000
 这的确	zhe di que	5000
 既可以	ji ke yi	5000
 才可以	cai ke yi	5000
+把控	ba kong	20000
+艾特	ai te	20000
+按需	an xu	20000
+半个多月	ban ge duo yue	20000
+爆炸头	bao zha tou	20000
+蹭吃	ceng chi	20000
+蹭饭	ceng fan	20000
+查漏补缺	cha lou bu que	20000
+差不了	cha bu liao	20000
+差点意思	cha dian yi si	20000
+吃啥	chi sha	20000
+大多时候	da duo shi hou	20000
+待办项	dai ban xiang	20000
+单播	dan bo	20000
+单聊	dan liao	20000
+丢包	diu bao	20000
+反复确认	fan fu que ren	20000
+干不动	gan bu dong	20000
+各方面	ge fang mian	20000
+薅羊毛	hao yang mao	20000
+话术	hua shu	20000
+拉满	la man	20000
+狸花猫	li hua mao	20000
+秒级	miao ji	20000
+拿不到	na bu dao	20000
+收得到	shou de dao	20000
+收起来	shou qi lai	20000
+私发	si fa	20000
+算出来	suan chu lai	20000
+太难	tai nan	20000
+挺大	ting da	20000
+挺长	ting zhang	20000
+新同事	xin tong shi	20000
+新员工	xin yuan gong	20000
+新老板	xin lao ban	20000
+新限制	xin xian zhi	20000
+学起来	xue qi lai	20000
+学习下	xue xi xia	20000
+一个小时	yi ge xiao shi	20000
+一早上	yi zao shang	20000
+七点半	qi dian ban	20000
+有意义	you yi yi	20000
+有点类似	you dian lei si	20000
+有点受不了	you dian shou bu liao	20000
+有段时间	you duan shi jian	20000
+游泳课	you yong ke	20000
+越来越贵	yue lai yue gui	20000
+扎带	zha dai	20000
+找机会	zhao ji hui	20000
+真车	zhen che	20000
+装逼	zhuang bi	20000
+捉急	zhuo ji	20000
+自己实现	zi ji shi xian	20000
+自己做	zi ji zuo	20000
+不包括	bu bao kuo	20000
+不参加	bu can jia	20000
+不参与	bu can yu	20000
+不对应	bu dui ying	20000
+不敢想	bu gan xiang	20000
+不过分	bu guo fen	20000
+不健壮	bu jian zhuang	20000
+不考虑	bu kao lv	20000
+不可以	bu ke yi	20000
+不可用	bu ke yong	20000
+不明显	bu ming xian	20000
+不生效	bu sheng xiao	20000
+不太好用	bu tai hao yong	20000
+不太合适	bu tai he shi	20000
+不太清楚	bu tai qing chu	20000
+不太准	bu tai zhun	20000
+不限于	bu xian yu	20000
+不要纠结	bu yao jiu jie	20000
+并不是	bing bu shi	20000
+别有	bie you	20000

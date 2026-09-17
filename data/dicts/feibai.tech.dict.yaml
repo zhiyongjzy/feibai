@@ -3,7 +3,7 @@
 # 来源：公开技术术语整理，MIT 协议
 ---
 name: feibai.tech
-version: "2026-05-21"
+version: "2026-09-17"
 sort: by_weight
 columns:
   - text
@@ -372,3 +372,24 @@ columns:
 换命令	huan ming ling	5000
 模块名	mo kuai ming	5000
 拉特巴赫	la te ba he	5000
+编译时	bian yi shi	8000
+大小端	da xiao duan	8000
+小端	xiao duan	8000
+对端	dui duan	8000
+公钥	gong yao	8000
+死代码	si dai ma	8000
+析构	xi gou	8000
+组包	zu bao	8000
+文件头	wen jian tou	8000
+逐文件	zhu wen jian	8000
+时间同步	shi jian tong bu	8000
+时间源	shi jian yuan	8000
+软件时钟	ruan jian shi zhong	8000
+软件时间戳	ruan jian shi jian chuo	8000
+硬件时钟	ying jian shi zhong	8000
+硬件时间戳	ying jian shi jian chuo	8000
+硬件事件	ying jian shi jian	8000
+硬件模式	ying jian mo shi	8000
+网络唤醒	wang luo huan xing	8000
+上下电	shang xia dian	8000
+三帧	san zhen	8000
