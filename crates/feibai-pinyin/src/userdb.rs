@@ -63,6 +63,18 @@ pub fn cmp_ranked(a: &DictEntry, b: &DictEntry, top: u64, now: u32) -> Ordering 
         .then_with(|| b.word.cmp(&a.word))
 }
 
+/// 静态 tie-break: 不依赖 key top 的确定性决胜链(base 降序 → 字数降序 → 字典序降序)。
+/// 跨 key 混排(前缀面板)必须用它做 rank 平分后的决胜 —— cmp_ranked 的分数层
+/// 依赖单侧 key 的 top, 对同一对元素从两侧比较结论可相反, 违反全序,
+/// Rust sort 检测到不一致比较器会 panic(生产 2026-09-17 实锤 39 次:
+/// panic 吞掉该次按键的 dbus 回复, 超时窗口内字母直通漏进应用)。
+pub fn cmp_tiebreak(a: &DictEntry, b: &DictEntry) -> Ordering {
+    b.base_weight
+        .cmp(&a.base_weight)
+        .then_with(|| b.word.chars().count().cmp(&a.word.chars().count()))
+        .then_with(|| b.word.cmp(&a.word))
+}
+
 /// 用户 bigram: (前词, 当前词) 共现计数, 参与 lookup 排序的上下文加成。
 /// 灵感来自 libime HistoryBigram(用户历史 bigram 与 base LM 插值)。
 #[derive(Default)]
@@ -193,6 +205,26 @@ mod tests {
         let fresh = e("吧", 25526, 8, 100);
         let stale = e("把", 108066, 8, 80); // now=100, 20 周前
         assert!(entry_score(&fresh, top, 100) > entry_score(&stale, top, 100));
+    }
+
+    #[test]
+    fn tiebreak_is_top_free_total_order() {
+        // 跨 key 混排的决胜链必须与 key top 无关 —— cmp_ranked 的分数层依赖
+        // 单侧 top, 同一对元素两侧比较结论可相反 → 违反全序 → sort panic
+        // (生产 2026-09-17 实锤)。cmp_tiebreak 签名即无 top,此处锁死
+        // 反对称/自反/base 降序语义。
+        let a = e("在啊", 900000, 0, 0);
+        let b = e("造词", 0, 2, 100);
+        assert_eq!(cmp_tiebreak(&a, &a), Ordering::Equal);
+        assert_eq!(cmp_tiebreak(&a, &b), cmp_tiebreak(&b, &a).reverse());
+        assert_eq!(cmp_tiebreak(&a, &b), Ordering::Less, "base 高者前");
+        let c = e("甲", 100, 0, 0);
+        let d = e("乙", 100, 0, 0);
+        assert_eq!(
+            cmp_tiebreak(&c, &d),
+            cmp_tiebreak(&d, &c).reverse(),
+            "base 相同也必须反对称"
+        );
     }
 
     #[test]

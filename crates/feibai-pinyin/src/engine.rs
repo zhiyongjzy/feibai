@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use feibai_core::*;
 
-use crate::userdb::{DictEntry, UserBigram, cmp_ranked, entry_score, key_top, now_week};
+use crate::userdb::{DictEntry, UserBigram, cmp_ranked, cmp_tiebreak, entry_score, key_top, now_week};
 
 const PAGE_SIZE: usize = 9;
 
@@ -367,7 +367,7 @@ impl PinyinEngine {
                 .map(|(e, top)| (rank_key(bigram, e, top, now, ctx.as_deref()), e, top))
                 .collect();
             prefix_entries.sort_by(|(ra, a, ta), (rb, b, _tb)| {
-                rb.cmp(ra).then_with(|| cmp_ranked(a, b, *ta, now))
+                rb.cmp(ra).then_with(|| cmp_tiebreak(a, b))
             });
             for (_, e, _) in prefix_entries.iter().take(50) {
                 if seen.insert(e.word.clone()) {
@@ -391,7 +391,7 @@ impl PinyinEngine {
                     .map(|(e, top)| (rank_key(bigram, e, top, now, ctx.as_deref()), e, top))
                     .collect();
                 single_prefix_entries.sort_by(|(ra, a, ta), (rb, b, _tb)| {
-                    rb.cmp(ra).then_with(|| cmp_ranked(a, b, *ta, now))
+                    rb.cmp(ra).then_with(|| cmp_tiebreak(a, b))
                 });
                 for (_, e, _) in single_prefix_entries.iter().take(50) {
                     if seen.insert(e.word.clone()) {
@@ -1929,5 +1929,53 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn prefix_panel_sort_survives_mixed_key_rank_ties() {
+        // 回归(生产 2026-09-17 实锤 39 次 panic): 前缀面板混排来自不同 key 的
+        // 词条, tie-break 曾用 cmp_ranked(a, b, *ta) —— 把 b 的分数按 a 的 key
+        // top 计算, 同一对元素从两侧比较结论可相反, 违反全序, Rust sort 检测
+        // 到不一致比较器即 panic, 该次按键的 dbus 回复丢失 → 裸字母漏进应用。
+        //
+        // 构造 rank 恰好相等的跨 key 对(数值抬到真实词频区间,确保进入前 50):
+        //   在啊@zaa: count=0, base=900000 → rank=900000(与 top 无关), ta=1000000
+        //   造词@zbb: count=2, base=0      → rank=tb-1+2=900000, tb=899999
+        // 用 ta=1000000 比: 造词分=999999+2=1000001>900000 → 造词前
+        // 用 tb=899999  比: 两者同为 900000 → 平分 → base 大者(在啊)前 —— 结论翻转
+        let mk = |word: &str, base: u64, count: u32, week: u32| DictEntry {
+            word: word.into(),
+            base_weight: base,
+            selection_count: count,
+            last_week: week,
+        };
+        let now = crate::userdb::now_week();
+        let mut engine = PinyinEngine::from_files(&[TEST_BASE, TEST_EXTRA]).unwrap();
+        engine.table.insert(
+            "zaa".to_string(),
+            vec![mk("昨啊", 1000000, 0, 0), mk("在啊", 900000, 0, 0)],
+        );
+        engine.table.insert(
+            "zbb".to_string(),
+            vec![mk("自币", 899999, 0, 0), mk("造词", 0, 2, now)],
+        );
+
+        // 任何一轮 lookup panic 即测试失败
+        for c in "z".chars() {
+            press_key(&mut engine, c);
+        }
+        let order1: Vec<String> = engine.candidates.iter().map(|c| c.text.clone()).collect();
+        assert!(
+            order1.iter().any(|w| w == "在啊") && order1.iter().any(|w| w == "造词"),
+            "两个构造词都应进入 z 前缀面板: {order1:?}"
+        );
+
+        // 重跑一轮, 排序必须确定
+        engine.reset();
+        for c in "z".chars() {
+            press_key(&mut engine, c);
+        }
+        let order2: Vec<String> = engine.candidates.iter().map(|c| c.text.clone()).collect();
+        assert_eq!(order1, order2, "同数据两次排序结果必须一致");
     }
 }
