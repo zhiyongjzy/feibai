@@ -9,7 +9,12 @@
 #      —— base/tech 已覆盖的词靠本地 user.dict 学习即可, 不重复入库
 #   2. 含字母/数字杂质 的词 (如 "手doong")  → 过滤
 #   3. 明显的人名/称呼模式 (X总/X哥/X姐/X先生/X老师/X同学/阿X/老X 等) → 过滤
-#   4. 其余新词(用户新造的口语/实义词)一律同步
+#   4. 个人排除清单 ~/.config/feibai/sync_exclude.txt 中的词 → 过滤
+#      (每行一个词, # 注释; 人名/昵称/团队黑话等不便入库的个人词写在这里)
+#   5. 选中次数 < min-count (默认 3) → 过滤 —— 甄别误打碎片:
+#      误打的碎片不会被再打第二次(count 停在低值), 真词会被反复使用;
+#      0.3.x 迁移把旧词统一记为 c=2, 故 c≥3 即"迁移后真实使用过"
+#   6. 其余新词(用户新造的口语/实义词)按真实使用次数同步
 #
 # 被过滤的词保留在本地 user.dict.txt (不影响个人使用), 只是不入仓库。
 #
@@ -28,9 +33,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 USER_DICT="${FEIBAI_USER_DICT:-$HOME/.config/feibai/user.dict.txt}"
+EXCLUDE_FILE="${FEIBAI_SYNC_EXCLUDE:-$HOME/.config/feibai/sync_exclude.txt}"
 EXTRA_DICT="$REPO_ROOT/data/dicts/feibai.extra.dict.yaml"
 BASE_DICT="$REPO_ROOT/data/dicts/feibai.base.dict.yaml"
 TECH_DICT="$REPO_ROOT/data/dicts/feibai.tech.dict.yaml"
+
+# --- 参数: --min-count N / --min-count=N (默认 3, 设 1 恢复旧行为) ---
+MIN_COUNT=3
+_args=("$@")
+for ((i=0; i<${#_args[@]}; i++)); do
+    case "${_args[$i]}" in
+        --min-count=*) MIN_COUNT="${_args[$i]#--min-count=}" ;;
+        --min-count)   if (( i+1 < ${#_args[@]} )); then MIN_COUNT="${_args[$((i+1))]}"; fi ;;
+    esac
+done
+case "$MIN_COUNT" in
+    ''|*[!0-9]*) echo "错误: --min-count 需要非负整数, got '$MIN_COUNT'" >&2; exit 1 ;;
+esac
 
 if [ ! -f "$USER_DICT" ]; then
     echo "错误: 找不到用户词库 $USER_DICT" >&2
@@ -41,10 +60,12 @@ if [ ! -f "$EXTRA_DICT" ]; then
     exit 1
 fi
 
-python3 - "$USER_DICT" "$EXTRA_DICT" "$BASE_DICT" "$TECH_DICT" << 'PYEOF'
+python3 - "$USER_DICT" "$EXTRA_DICT" "$BASE_DICT" "$TECH_DICT" "$MIN_COUNT" "$EXCLUDE_FILE" << 'PYEOF'
 import sys, os, re, math
 
 user_dict, extra, base, tech = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+min_count = int(sys.argv[5])
+exclude_file = sys.argv[6]
 
 def load_repo(paths):
     """返回 (known_words: set, exact: set of (word,pinyin))，跳过 YAML 头部和注释"""
@@ -71,6 +92,14 @@ def load_repo(paths):
     return known_words, exact
 
 repo_words, repo_exact = load_repo([extra, base, tech])
+
+# 个人排除清单: 每行一个词, # 开头为注释 (人名/昵称/团队黑话等)
+exclude_words = set()
+if os.path.exists(exclude_file):
+    for line in open(exclude_file, encoding='utf-8'):
+        s = line.strip()
+        if s and not s.startswith('#'):
+            exclude_words.add(s)
 
 # --- 通用性过滤规则 ---
 
@@ -109,7 +138,7 @@ def map_weight(count):
 
 # --- 收集可同步的词 ---
 new_words = {}          # (word, pinyin) -> count (选中次数)
-filtered = {'junk': [], 'title': []}   # 统计被过滤的
+filtered = {'junk': [], 'title': [], 'exclude': [], 'min_count': 0}   # 统计被过滤的
 
 for line in open(user_dict, encoding='utf-8'):
     if line.startswith('#') or not line.strip():
@@ -134,6 +163,10 @@ for line in open(user_dict, encoding='utf-8'):
     # 过滤: 人名/称呼
     if is_title_word(word):
         filtered['title'].append(word)
+        continue
+    # 过滤: 个人排除清单
+    if word in exclude_words:
+        filtered['exclude'].append(word)
         continue
 
     # 提取 c= 计数 (双格式, 跳过规则与引擎 parse_userdb 迁移逻辑对齐):
@@ -167,6 +200,11 @@ for line in open(user_dict, encoding='utf-8'):
         count = raw_c
     if count < 1:
         count = 1  # c=0/负数防御: log2 需要 ≥1
+    # 过滤: 甄别误打碎片 —— 次数不足说明只是被误打/一次性输入,
+    # 真词会被反复使用 (c≥3 即 0.3.x 迁移后真实使用过)
+    if count < min_count:
+        filtered['min_count'] += 1
+        continue
     key = (word, pinyin)
     if key not in new_words or new_words[key] < count:
         new_words[key] = count
@@ -181,10 +219,12 @@ with open(extra, 'a', encoding='utf-8') as f:
     f.writelines(new_lines)
 
 # --- 输出统计 ---
-print(f"新增 {len(entries)} 个用户词到 feibai.extra.dict.yaml")
+print(f"新增 {len(entries)} 个用户词到 feibai.extra.dict.yaml (min-count={min_count})")
 if entries:
     preview = "  ".join(f"{w}={x}" for x, w, p in entries[:5])
     print(f"  权重最高: {preview}")
 print(f"已过滤 {len(filtered['junk'])} 个含杂质词: {', '.join(filtered['junk'][:10])}")
 print(f"已过滤 {len(filtered['title'])} 个人名/称呼词: {', '.join(filtered['title'][:10])}")
+print(f"已过滤 {len(filtered['exclude'])} 个排除清单词: {', '.join(filtered['exclude'][:10])}")
+print(f"已过滤 {filtered['min_count']} 个低频词 (c<{min_count}, 多为误打碎片/迁移虚高)")
 PYEOF
