@@ -80,6 +80,23 @@ pub fn cmp_tiebreak(a: &DictEntry, b: &DictEntry) -> Ordering {
         .then_with(|| b.word.cmp(&a.word))
 }
 
+/// viterbi 组句从组内取「可信最优」词条: base 词, 或已确认(c≥2)的用户词。
+/// c=1 沉底造词不参与自动组句 —— 误上屏一次的碎片(如 侺呣@shenm)曾借
+/// viterbi「词数少恒胜」霸占面板 #1 并自锁(生产 2026-09-17~10-09 实锤,
+/// 46 次误上屏、45 词条污染 user.dict)。
+///
+/// 方向警告: cmp_ranked 是为 sort_by 设计的**降序**比较器, 而 max_by 期望
+/// 升序 —— 必须交换参数写成 cmp_ranked(b, a)。0.3.0~0.3.2 直接
+/// max_by(cmp_ranked(a, b)) 反转成取组内**最低分**, 组句尽是权重 1 的
+/// 生僻字(shen→侺、zuo→咗), 垃圾句霸占 #1。
+pub fn best_composable<'a>(entries: &'a [DictEntry], now: u32) -> Option<&'a DictEntry> {
+    let top = key_top(entries);
+    entries
+        .iter()
+        .filter(|e| e.base_weight > 0 || e.selection_count >= 2)
+        .max_by(|a, b| cmp_ranked(b, a, top, now))
+}
+
 /// 用户 bigram: (前词, 当前词) 共现计数, 参与 lookup 排序的上下文加成。
 /// 灵感来自 libime HistoryBigram(用户历史 bigram 与 base LM 插值)。
 #[derive(Default)]

@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 
 use feibai_core::*;
 
-use crate::userdb::{DictEntry, UserBigram, cmp_ranked, cmp_tiebreak, entry_score, key_top, now_week};
+use crate::userdb::{
+    DictEntry, UserBigram, best_composable, cmp_ranked, cmp_tiebreak, entry_score, key_top,
+    now_week,
+};
 
 const PAGE_SIZE: usize = 9;
 
@@ -454,10 +457,11 @@ impl PinyinEngine {
             for len in 1..=max_len {
                 let key: String = segs[i..i + len].concat();
                 if let Some(entries) = self.table.get(&key) {
-                    // Task 3 起表内是插入序, first() 不再是最优 —— 按 cmp_ranked 取最优;
+                    // 组句取组内可信最优(base 词或 c≥2 用户词)。
+                    // 0.3.0~0.3.2 曾把降序比较器 cmp_ranked 直接喂 max_by,
+                    // 反转成取组内最低分 → 组句尽是权重 1 的生僻字(v0.3.3 修复);
                     // DP 词分仍用 base_weight(排序位次与词分解耦)
-                    let top = key_top(entries);
-                    if let Some(best) = entries.iter().max_by(|a, b| cmp_ranked(a, b, top, now)) {
+                    if let Some(best) = best_composable(entries, now) {
                         let word_score = (best.base_weight.max(1) as f64).ln();
                         let new_score = dp_score[i] + word_score;
                         let new_words = dp_words[i] + 1;
@@ -1399,6 +1403,66 @@ mod tests {
         let top = crate::userdb::key_top(entries);
         let e = entries.iter().find(|x| x.word == "哟嗯").unwrap();
         assert_eq!(crate::userdb::entry_score(e, top, e.last_week), crate::userdb::NEW_WORD_BASE);
+    }
+
+    #[test]
+    fn viterbi_sentence_picks_best_entry_per_syllable() {
+        // 生产 2026-09-17~10-09 回归: viterbi 组句选词曾把降序比较器 cmp_ranked
+        // 直接喂给 max_by(它期望升序), 方向反转成取组内最低分 —— 组句全是
+        // 权重 1 的生僻字(shen→侺、zuo→咗), 垃圾句霸占面板 #1, 3 周误上屏 46 次。
+        let mut engine = PinyinEngine::new_empty();
+        let mk = |word: &str, base: u64, count: u32| DictEntry {
+            word: word.to_string(),
+            base_weight: base,
+            selection_count: count,
+            last_week: now_week(),
+        };
+        // 模拟真实词库: shen 组 身(15789)/甚(13115)/侺(1), m 组只有 呣(4)
+        engine.table.insert(
+            "shen".to_string(),
+            vec![mk("身", 15789, 0), mk("甚", 13115, 0), mk("侺", 1, 0)],
+        );
+        engine.table.insert("m".to_string(), vec![mk("呣", 4, 0)]);
+        for c in "shenm".chars() {
+            press_key(&mut engine, c);
+        }
+        // 组句必须取各组最优: 身+呣, 而非最差的 侺+呣
+        assert_eq!(
+            engine.candidates[0].text,
+            "身呣",
+            "viterbi 组句应由各组最高分词条构成, got: {:?}",
+            engine.candidates.iter().take(3).map(|c| c.text.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sentence_not_dominated_by_unconfirmed_new_word() {
+        // 生产回归: 误上屏一次的 c=1 沉底造词(侺呣@shenm, 沉底分 NEW_WORD_BASE)
+        // 曾借 viterbi「词数少恒胜」霸占面板 #1 且永远压过正确组句 → 自锁。
+        // 规则: 组句只信 base 词或已确认(c≥2)的用户词; c=1 造词沉底但保留。
+        let mut engine = PinyinEngine::new_empty();
+        let mk = |word: &str, base: u64, count: u32| DictEntry {
+            word: word.to_string(),
+            base_weight: base,
+            selection_count: count,
+            last_week: now_week(),
+        };
+        engine.table.insert("shen".to_string(), vec![mk("身", 15789, 0)]);
+        engine.table.insert("m".to_string(), vec![mk("呣", 4, 0)]);
+        // 误学词条: key "shenm" 恰为整段拼接, count=1 未确认
+        engine.table.insert("shenm".to_string(), vec![mk("侺呣", 0, 1)]);
+        for c in "shenm".chars() {
+            press_key(&mut engine, c);
+        }
+        assert_eq!(
+            engine.candidates[0].text,
+            "身呣",
+            "c=1 沉底造词不得霸占 #1, got: {:?}",
+            engine.candidates.iter().take(3).map(|c| c.text.clone()).collect::<Vec<_>>()
+        );
+        // 沉底而非消失: 侺呣 仍是候选, 排在可信组句之后
+        let pos = engine.candidates.iter().position(|c| c.text == "侺呣");
+        assert!(pos.is_some_and(|p| p > 0), "c=1 造词应沉底保留, got pos: {pos:?}");
     }
 
     #[test]
