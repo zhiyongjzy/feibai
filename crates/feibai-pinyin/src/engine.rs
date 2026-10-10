@@ -853,11 +853,14 @@ impl Engine for PinyinEngine {
     fn process_key(&mut self, key: &KeyEvent) -> Vec<EngineAction> {
         let keysym = key.keysym;
 
-        // Track Shift for toggle: press alone (no other key in between) = toggle
+        // Track Shift for toggle: press alone (no other key in between) = toggle.
+        // Always forward Shift events so the client maintains its xkb modifier
+        // state — critical on IBus + Wayland where the client owns the xkb state
+        // machine (unlike X11 where the X server tracks modifiers independently).
         if keysym == KEYSYM_SHIFT_L || keysym == KEYSYM_SHIFT_R {
             if key.state == KeyState::Press {
                 self.shift_pressed_alone = true;
-                return vec![EngineAction::Noop];
+                return vec![EngineAction::Forward];
             } else {
                 // Release — if no other key was pressed, toggle mode
                 if self.shift_pressed_alone {
@@ -871,11 +874,12 @@ impl Engine for PinyinEngine {
                             EngineAction::Commit(text),
                             EngineAction::UpdatePreedit(String::new()),
                             EngineAction::UpdateCandidates(Vec::new()),
+                            EngineAction::Forward,
                         ];
                     }
-                    return vec![EngineAction::Noop];
+                    return vec![EngineAction::Forward];
                 }
-                return vec![EngineAction::Noop];
+                return vec![EngineAction::Forward];
             }
         }
 
