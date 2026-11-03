@@ -37,7 +37,7 @@ impl PinyinEngine {
         Self {
             table: BTreeMap::new(),
             en_dict: BTreeMap::new(),
-            syllables: PINYIN_SYLLABLES.iter().copied().collect(),
+            syllables: PINYIN_SYLLABLES.split_whitespace().collect(),
             preedit: String::new(),
             segments: Vec::new(),
             selected_words: Vec::new(),
@@ -147,7 +147,7 @@ impl PinyinEngine {
                 .unwrap_or(1);
 
             // Concatenate pinyin syllables (remove spaces) as lookup key
-            let key: String = pinyin_raw.split_whitespace().collect();
+            let key = self.normalize_dictionary_key(pinyin_raw, word);
 
             self.table.entry(key).or_default().push(DictEntry {
                 word: word.to_string(),
@@ -239,7 +239,7 @@ impl PinyinEngine {
                 dropped += 1;
                 continue;
             }
-            let key: String = pinyin_raw.split_whitespace().collect();
+            let key = self.normalize_dictionary_key(pinyin_raw, word);
 
             let entries = self.table.entry(key).or_default();
             let (count, last_week) = match week {
@@ -281,6 +281,19 @@ impl PinyinEngine {
         self.segments = self.segment(&preedit).iter().map(|s| s.to_string()).collect();
     }
 
+    fn normalize_dictionary_key(&self, pinyin: &str, word: &str) -> String {
+        if !pinyin.contains("lue") && !pinyin.contains("nue") {
+            return pinyin.split_whitespace().collect();
+        }
+        let separated = pinyin.split_whitespace().collect::<Vec<_>>().join("'");
+        let segments = self.segment(&separated);
+        // Do not move old cu+lu+e compositions onto the new cu+lve alias key.
+        if segments.len() < word.chars().count() {
+            return pinyin.split_whitespace().collect();
+        }
+        segments.into_iter().map(canonical_syllable).collect()
+    }
+
     fn total_selected_segs(&self) -> usize {
         self.selected_seg_counts.iter().sum()
     }
@@ -294,12 +307,18 @@ impl PinyinEngine {
         }
 
         let n = remaining.len();
+        let implicit_standalone: Vec<bool> = self.preedit.split('\'')
+            .flat_map(|part| self.segment_dp(part).into_iter()
+                .map(move |seg| matches!(seg, "m" | "n") && seg != part))
+            .collect();
+        let implicit_standalone = &implicit_standalone[self.total_selected_segs()..];
         self.candidates = Vec::new();
         self.page = 0;
 
         // Check if the last segment is incomplete (not a valid syllable)
         let last_seg = &remaining[n - 1];
-        let last_is_incomplete = !self.syllables.contains(last_seg.as_str());
+        let last_is_incomplete = !self.syllables.contains(last_seg.as_str())
+            || implicit_standalone[n - 1];
 
         // If any segment is not a valid syllable, offer raw input as first candidate
         let has_invalid_seg = remaining.iter().any(|s| !self.syllables.contains(s.as_str()));
@@ -310,7 +329,9 @@ impl PinyinEngine {
 
         // Viterbi DP: only on complete syllables
         let complete_segs = if last_is_incomplete { &remaining[..n - 1] } else { remaining };
-        let sentence = if complete_segs.len() > 1 {
+        let sentence = if complete_segs.len() > 1
+            && !implicit_standalone[..complete_segs.len()].contains(&true)
+        {
             self.viterbi_best_sentence(complete_segs)
         } else {
             None
@@ -333,7 +354,10 @@ impl PinyinEngine {
         let bigram = &self.bigram;
         let exact_end = if last_is_incomplete { n - 1 } else { n };
         for end in (1..=exact_end.min(8)).rev() {
-            let key: String = remaining[..end].concat();
+            if end > 1 && implicit_standalone[..end].contains(&true) {
+                continue;
+            }
+            let key = syllable_key(&remaining[..end]);
             if let Some(entries) = self.table.get(&key) {
                 let top = key_top(entries);
                 let mut ranked: Vec<&DictEntry> = entries.iter().collect();
@@ -358,7 +382,7 @@ impl PinyinEngine {
         // 前缀范围可达数万条(z 前缀 ~2.8 万), rank_key 含 bigram 查表,
         // 排序闭包内逐次计算会放大到 O(n log n) 次 —— 先算好分再排序, 顺序不变
         if last_is_incomplete {
-            let prefix: String = remaining.concat();
+            let prefix = syllable_key(remaining);
             let prefix_end = prefix_upper_bound(&prefix);
             let mut prefix_entries: Vec<(u64, &DictEntry, u64)> = self.table
                 .range(prefix.clone()..prefix_end)
@@ -455,7 +479,7 @@ impl PinyinEngine {
             }
             let max_len = (n - i).min(8);
             for len in 1..=max_len {
-                let key: String = segs[i..i + len].concat();
+                let key = syllable_key(&segs[i..i + len]);
                 if let Some(entries) = self.table.get(&key) {
                     // 组句取组内可信最优(base 词或 c≥2 用户词)。
                     // 0.3.0~0.3.2 曾把降序比较器 cmp_ranked 直接喂 max_by,
@@ -564,7 +588,7 @@ impl PinyinEngine {
         if segs.iter().any(|s| !self.syllables.contains(s.as_str())) {
             return;
         }
-        let key: String = segs.concat();
+        let key = syllable_key(segs);
         let now = now_week();
         let entries = self.table.entry(key).or_default();
         if let Some(e) = entries.iter_mut().find(|e| e.word == sentence) {
@@ -626,7 +650,7 @@ impl PinyinEngine {
         // 学习: 选中即计数 + 上下文 bigram(前词=上次选中/上屏词)。
         // 仅对可学词记录: ASCII 原样上屏既不记共现也不更新上下文
         // (上下文语义 = 最近一个可学中文词)
-        let word_key: String = remaining[..seg_count].concat();
+        let word_key = syllable_key(&remaining[..seg_count]);
         let word_segs: Vec<String> = remaining[..seg_count].to_vec();
         if self.learnable(&text, &word_segs) {
             self.bigram.bump(self.last_context.as_deref(), &text);
@@ -663,7 +687,7 @@ impl PinyinEngine {
 
     fn find_seg_count_for_word(&self, word: &str, remaining: &[String]) -> usize {
         for end in 1..=remaining.len().min(8) {
-            let key: String = remaining[..end].concat();
+            let key = syllable_key(&remaining[..end]);
             if let Some(entries) = self.table.get(&key) {
                 if entries.iter().any(|e| e.word == word) {
                     return end;
@@ -671,7 +695,7 @@ impl PinyinEngine {
             }
         }
         // Check if it's a prefix match (trailing incomplete syllable)
-        let full_key: String = remaining.concat();
+        let full_key = syllable_key(remaining);
         let upper = prefix_upper_bound(&full_key);
         for (_key, entries) in self.table.range(full_key..upper) {
             if entries.iter().any(|e| e.word == word) {
@@ -790,6 +814,18 @@ impl PinyinEngine {
     }
 }
 
+fn canonical_syllable(syllable: &str) -> &str {
+    match syllable {
+        "lue" => "lve",
+        "nue" => "nve",
+        _ => syllable,
+    }
+}
+
+fn syllable_key(segments: &[String]) -> String {
+    segments.iter().map(|s| canonical_syllable(s)).collect()
+}
+
 fn prefix_upper_bound(prefix: &str) -> String {
     let mut bytes = prefix.as_bytes().to_vec();
     // Increment the last byte to get the exclusive upper bound for range query
@@ -820,31 +856,7 @@ fn rank_key(
     }
 }
 
-const PINYIN_SYLLABLES: &[&str] = &[
-    "a", "ai", "an", "ang", "ao",
-    "ba", "bai", "ban", "bang", "bao", "bei", "ben", "beng", "bi", "bian", "biang", "biao", "bie", "bin", "bing", "bo", "bu",
-    "ca", "cai", "can", "cang", "cao", "ce", "cei", "cen", "ceng", "cha", "chai", "chan", "chang", "chao", "che", "chen", "cheng", "chi", "chong", "chou", "chu", "chua", "chuai", "chuan", "chuang", "chui", "chun", "chuo", "ci", "cong", "cou", "cu", "cuan", "cui", "cun", "cuo",
-    "da", "dai", "dan", "dang", "dao", "de", "dei", "den", "deng", "di", "dia", "dian", "diao", "die", "ding", "diu", "dong", "dou", "du", "duan", "dui", "dun", "duo",
-    "e", "ei", "en", "eng", "er",
-    "fa", "fan", "fang", "fei", "fen", "feng", "fiao", "fo", "fou", "fu",
-    "ga", "gai", "gan", "gang", "gao", "ge", "gei", "gen", "geng", "gong", "gou", "gu", "gua", "guai", "guan", "guang", "gui", "gun", "guo",
-    "ha", "hai", "han", "hang", "hao", "he", "hei", "hen", "heng", "hm", "hng", "hong", "hou", "hu", "hua", "huai", "huan", "huang", "hui", "hun", "huo",
-    "ji", "jia", "jian", "jiang", "jiao", "jie", "jin", "jing", "jiong", "jiu", "ju", "juan", "jue", "jun",
-    "ka", "kai", "kan", "kang", "kao", "ke", "kei", "ken", "keng", "kong", "kou", "ku", "kua", "kuai", "kuan", "kuang", "kui", "kun", "kuo",
-    "la", "lai", "lan", "lang", "lao", "le", "lei", "leng", "li", "lia", "lian", "liang", "liao", "lie", "lin", "ling", "liu", "lo", "long", "lou", "lu", "luan", "lun", "luo", "lv", "lve",
-    "m", "ma", "mai", "man", "mang", "mao", "me", "mei", "men", "meng", "mi", "mian", "miao", "mie", "min", "ming", "miu", "mo", "mou", "mu",
-    "n", "na", "nai", "nan", "nang", "nao", "ne", "nei", "nen", "neng", "ng", "ni", "nian", "niang", "niao", "nie", "nin", "ning", "niu", "nong", "nou", "nu", "nuan", "nuo", "nv", "nve",
-    "o", "ou",
-    "pa", "pai", "pan", "pang", "pao", "pei", "pen", "peng", "pi", "pian", "piao", "pie", "pin", "ping", "po", "pou", "pu",
-    "qi", "qia", "qian", "qiang", "qiao", "qie", "qin", "qing", "qiong", "qiu", "qu", "quan", "que", "qun",
-    "ran", "rang", "rao", "re", "ren", "reng", "ri", "rong", "rou", "ru", "rua", "ruan", "rui", "run", "ruo",
-    "sa", "sai", "san", "sang", "sao", "se", "sen", "seng", "sha", "shai", "shan", "shang", "shao", "she", "shei", "shen", "sheng", "shi", "shou", "shu", "shua", "shuai", "shuan", "shuang", "shui", "shun", "shuo", "si", "song", "sou", "su", "suan", "sui", "sun", "suo",
-    "ta", "tai", "tan", "tang", "tao", "te", "tei", "teng", "ti", "tian", "tiao", "tie", "ting", "tong", "tou", "tu", "tuan", "tui", "tun", "tuo",
-    "wa", "wai", "wan", "wang", "wei", "wen", "weng", "wo", "wu",
-    "xi", "xia", "xian", "xiang", "xiao", "xie", "xin", "xing", "xiong", "xiu", "xu", "xuan", "xue", "xun",
-    "ya", "yan", "yang", "yao", "ye", "yi", "yin", "ying", "yo", "yong", "you", "yu", "yuan", "yue", "yun",
-    "za", "zai", "zan", "zang", "zao", "ze", "zei", "zen", "zeng", "zha", "zhai", "zhan", "zhang", "zhao", "zhe", "zhei", "zhen", "zheng", "zhi", "zhong", "zhou", "zhu", "zhua", "zhuai", "zhuan", "zhuang", "zhui", "zhun", "zhuo", "zi", "zong", "zou", "zu", "zuan", "zui", "zun", "zuo",
-];
+const PINYIN_SYLLABLES: &str = include_str!("../../../data/pinyin_syllables.txt");
 
 const KEYSYM_SHIFT_L: u32 = 0xffe1;
 const KEYSYM_SHIFT_R: u32 = 0xffe2;
@@ -1059,6 +1071,95 @@ mod tests {
 
     fn make_engine() -> PinyinEngine {
         PinyinEngine::from_file(TEST_BASE).unwrap()
+    }
+
+    #[test]
+    fn spelling_aliases_share_candidates_and_learning_keys() {
+        let mut engine = make_engine();
+        for (alias, canonical, word) in [
+            ("culue", "culve", "粗略"),
+            ("nuedai", "nvedai", "虐待"),
+            ("lue", "lve", "略"),
+            ("nue", "nve", "虐"),
+        ] {
+            for input in [alias, canonical] {
+                engine.reset();
+                for c in input.chars() {
+                    press_key(&mut engine, c);
+                }
+                assert_eq!(engine.compose_preedit(), input);
+                let idx = engine.candidates.iter().position(|c| c.text == word)
+                    .unwrap_or_else(|| panic!("{input} should offer {word}"));
+                assert!(engine.select_candidate(idx).iter()
+                    .any(|a| matches!(a, EngineAction::Commit(s) if s == word)));
+            }
+            assert_eq!(engine.table[canonical].iter().find(|e| e.word == word).unwrap().selection_count, 2);
+            assert!(!engine.table.contains_key(alias), "aliases must not split learning keys");
+        }
+        for input in ["luxian", "nuli", "lv", "nv", "lu'e"] {
+            engine.reset();
+            for c in input.chars() {
+                press_key(&mut engine, c);
+            }
+            assert!(!engine.candidates.is_empty(), "{input} must keep candidates");
+            if input == "lu'e" {
+                assert!(!engine.candidates.iter().any(|c| c.text == "略"));
+            }
+        }
+    }
+
+    #[test]
+    fn spelling_aliases_normalize_dictionary_and_user_keys() {
+        let mut engine = PinyinEngine::new_empty();
+        engine.parse_rime_dict("---\nname: alias\n...\n粗略\tcu lue\t100\n虐待\tnuedai\t100\n");
+        engine.parse_userdb("culue\t粗略\tc=7 t=2965\nnuedai\t虐待\tc=5 t=2965\n");
+        for (key, word, count) in [("culve", "粗略", 7), ("nvedai", "虐待", 5)] {
+            let entries = engine.table.get(key).expect("canonical dictionary key");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].word, word);
+            assert_eq!(entries[0].base_weight, 100);
+            assert_eq!(entries[0].selection_count, count);
+        }
+        engine.parse_userdb("culue\t粗路鄂\tc=20 t=2965\nnuer\t努尔\tc=3 t=2965\n");
+        assert!(engine.table.contains_key("culue"), "keep the old composition on its old key");
+        assert!(engine.table.contains_key("nuer"), "nu+er must not become nve+r");
+        for c in "culue".chars() {
+            press_key(&mut engine, c);
+        }
+        assert_eq!(engine.candidates[0].text, "粗略");
+        assert!(!engine.candidates.iter().any(|c| c.text == "粗路鄂"));
+    }
+
+    #[test]
+    fn implicit_standalone_syllables_do_not_generate_sentences() {
+        let mut engine = make_engine();
+        engine.parse_userdb("zenm\t怎呣\tc=20 t=2965\ndaim\t带呣\tc=20 t=2965\n");
+        for (input, bad) in [("zenm", "怎呣"), ("daim", "带呣"), ("mni", "呣你")] {
+            engine.reset();
+            for c in input.chars() {
+                press_key(&mut engine, c);
+            }
+            assert!(!engine.candidates.iter().any(|c| c.text == bad), "{input} offered {bad}");
+            assert!(!engine.candidates.is_empty(), "{input} must retain useful candidates");
+        }
+        engine.reset();
+        for c in "zenme".chars() {
+            press_key(&mut engine, c);
+        }
+        assert_eq!(engine.candidates[0].text, "怎么");
+        for input in ["m", "n", "zen'm", "m'ni"] {
+            engine.reset();
+            for c in input.chars() {
+                press_key(&mut engine, c);
+            }
+            assert!(!engine.candidates.is_empty(), "explicit {input} must remain valid");
+            if input == "zen'm" {
+                assert!(engine.candidates.iter().any(|c| c.text == "怎呣"));
+            }
+            if input == "m'ni" {
+                assert!(engine.candidates.iter().any(|c| c.text == "呣你"));
+            }
+        }
     }
 
     #[test]
@@ -1427,7 +1528,7 @@ mod tests {
             vec![mk("身", 15789, 0), mk("甚", 13115, 0), mk("侺", 1, 0)],
         );
         engine.table.insert("m".to_string(), vec![mk("呣", 4, 0)]);
-        for c in "shenm".chars() {
+        for c in "shen'm".chars() {
             press_key(&mut engine, c);
         }
         // 组句必须取各组最优: 身+呣, 而非最差的 侺+呣
@@ -1455,7 +1556,7 @@ mod tests {
         engine.table.insert("m".to_string(), vec![mk("呣", 4, 0)]);
         // 误学词条: key "shenm" 恰为整段拼接, count=1 未确认
         engine.table.insert("shenm".to_string(), vec![mk("侺呣", 0, 1)]);
-        for c in "shenm".chars() {
+        for c in "shen'm".chars() {
             press_key(&mut engine, c);
         }
         assert_eq!(

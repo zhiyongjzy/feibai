@@ -3,7 +3,7 @@
 # 来源：公开技术术语整理，MIT 协议
 ---
 name: feibai.tech
-version: "2026-09-17"
+version: "2026-11-02"
 sort: by_weight
 columns:
   - text
@@ -393,3 +393,12 @@ columns:
 网络唤醒	wang luo huan xing	8000
 上下电	shang xia dian	8000
 三帧	san zhen	8000
+晶振	jing zhen	8000
+必现	bi xian	8000
+提票	ti piao	8000
+全量	quan liang	8000
+工作目录	gong zuo mu lu	8000
+设备树	she bei shu	8000
+系统时钟	xi tong shi zhong	8000
+系统时间	xi tong shi jian	8000
+伪代码	wei dai ma	8000

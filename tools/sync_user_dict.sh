@@ -11,10 +11,8 @@
 #   3. 明显的人名/称呼模式 (X总/X哥/X姐/X先生/X老师/X同学/阿X/老X 等) → 过滤
 #   4. 个人排除清单 ~/.config/feibai/sync_exclude.txt 中的词 → 过滤
 #      (每行一个词, # 注释; 人名/昵称/团队黑话等不便入库的个人词写在这里)
-#   5. 选中次数 < min-count (默认 3) → 过滤 —— 甄别误打碎片:
-#      误打的碎片不会被再打第二次(count 停在低值), 真词会被反复使用;
-#      0.3.x 迁移把旧词统一记为 c=2, 故 c≥3 即"迁移后真实使用过"
-#   6. 其余新词(用户新造的口语/实义词)按真实使用次数同步
+#   5. 选中次数 < min-count (默认 3) → 过滤; 次数仅作候选门槛, 不保证是真词
+#   6. 默认只预览; --write --approved FILE 仅同步人工审核的词和拼音
 #
 # 被过滤的词保留在本地 user.dict.txt (不影响个人使用), 只是不入仓库。
 #
@@ -37,19 +35,7 @@ EXCLUDE_FILE="${FEIBAI_SYNC_EXCLUDE:-$HOME/.config/feibai/sync_exclude.txt}"
 EXTRA_DICT="$REPO_ROOT/data/dicts/feibai.extra.dict.yaml"
 BASE_DICT="$REPO_ROOT/data/dicts/feibai.base.dict.yaml"
 TECH_DICT="$REPO_ROOT/data/dicts/feibai.tech.dict.yaml"
-
-# --- 参数: --min-count N / --min-count=N (默认 3, 设 1 恢复旧行为) ---
-MIN_COUNT=3
-_args=("$@")
-for ((i=0; i<${#_args[@]}; i++)); do
-    case "${_args[$i]}" in
-        --min-count=*) MIN_COUNT="${_args[$i]#--min-count=}" ;;
-        --min-count)   if (( i+1 < ${#_args[@]} )); then MIN_COUNT="${_args[$((i+1))]}"; fi ;;
-    esac
-done
-case "$MIN_COUNT" in
-    ''|*[!0-9]*) echo "错误: --min-count 需要非负整数, got '$MIN_COUNT'" >&2; exit 1 ;;
-esac
+SYLLABLES_FILE="$REPO_ROOT/data/pinyin_syllables.txt"
 
 if [ ! -f "$USER_DICT" ]; then
     echo "错误: 找不到用户词库 $USER_DICT" >&2
@@ -60,12 +46,66 @@ if [ ! -f "$EXTRA_DICT" ]; then
     exit 1
 fi
 
-python3 - "$USER_DICT" "$EXTRA_DICT" "$BASE_DICT" "$TECH_DICT" "$MIN_COUNT" "$EXCLUDE_FILE" << 'PYEOF'
-import sys, os, re, math
+python3 - "$USER_DICT" "$EXTRA_DICT" "$BASE_DICT" "$TECH_DICT" "$EXCLUDE_FILE" "$SYLLABLES_FILE" "$@" << 'PYEOF'
+import argparse, sys, os, re, math, tempfile, stat
 
 user_dict, extra, base, tech = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-min_count = int(sys.argv[5])
-exclude_file = sys.argv[6]
+exclude_file = sys.argv[5]
+
+def nonnegative_int(value):
+    if not re.fullmatch(r'[0-9]+', value):
+        raise argparse.ArgumentTypeError("需要非负整数")
+    return int(value)
+
+parser = argparse.ArgumentParser(
+    prog="sync_user_dict.sh",
+    description="默认预览候选词; 写入必须提供人工审核词单 (词<TAB>拼音)。",
+)
+parser.add_argument("--min-count", type=nonnegative_int, default=3)
+parser.add_argument("--approved", metavar="FILE", help="审核词单: 每行词<TAB>拼音, 支持 # 注释")
+parser.add_argument("--write", action="store_true", help="仅写入审核词单中的合格候选")
+args = parser.parse_args(sys.argv[7:])
+if args.write and not args.approved:
+    parser.error("--write 必须同时指定 --approved FILE")
+min_count = args.min_count
+with open(sys.argv[6], encoding='utf-8') as f:
+    syllables = set(f.read().split())
+
+def segment(part):
+    """与 engine.rs segment_dp 一致: 完整覆盖优先, 否则贪心保留末尾片段。"""
+    size = len(part)
+    if not size:
+        return []
+    dp = [(0, 0, 0)] * (size + 1)
+    for i in range(size - 1, -1, -1):
+        best = (0, 0, i + 1)
+        for length in range(1, min(size - i, 6) + 1):
+            if part[i:i + length] in syllables:
+                covered, count, _ = dp[i + length]
+                candidate = (covered + length, count + 1, i + length)
+                if candidate[0] > best[0] or (candidate[0] == best[0] and candidate[1] < best[1]):
+                    best = candidate
+        dp[i] = best
+    result = []
+    pos = 0
+    while pos < size:
+        if dp[0][0] == size:
+            end = dp[pos][2]
+        else:
+            end = next((pos + n for n in range(min(size - pos, 6), 0, -1)
+                        if part[pos:pos + n] in syllables), size)
+        result.append(part[pos:end])
+        pos = end
+    return result
+
+def normalize_pinyin(pinyin, word):
+    compact = ''.join(pinyin.split())
+    if 'lue' not in pinyin and 'nue' not in pinyin:
+        return compact
+    segments = [s for part in pinyin.split() for s in segment(part)]
+    if len(segments) < len(word):
+        return compact
+    return ''.join({'lue': 'lve', 'nue': 'nve'}.get(s, s) for s in segments)
 
 def load_repo(paths):
     """返回 (known_words: set, exact: set of (word,pinyin))，跳过 YAML 头部和注释"""
@@ -88,7 +128,7 @@ def load_repo(paths):
             parts = line.rstrip('\n').split('\t')
             if len(parts) >= 3 and parts[0] and parts[1]:
                 known_words.add(parts[0])
-                exact.add((parts[0], parts[1]))
+                exact.add((parts[0], normalize_pinyin(parts[1], parts[0])))
     return known_words, exact
 
 repo_words, repo_exact = load_repo([extra, base, tech])
@@ -151,7 +191,7 @@ for line in open(user_dict, encoding='utf-8'):
         continue
     # 拼音归一化成连写形式: 新格式本就连写, 旧格式空格分隔;
     # 同词的新旧格式行据此正确去重
-    pinyin = ''.join(pinyin.split())
+    pinyin = normalize_pinyin(pinyin, word)
     # 已在仓库词典中的词跳过 (按 word 判断, 避免对 base/tech 已覆盖的词重复入库)
     if word in repo_words:
         continue
@@ -200,8 +240,7 @@ for line in open(user_dict, encoding='utf-8'):
         count = raw_c
     if count < 1:
         count = 1  # c=0/负数防御: log2 需要 ≥1
-    # 过滤: 甄别误打碎片 —— 次数不足说明只是被误打/一次性输入,
-    # 真词会被反复使用 (c≥3 即 0.3.x 迁移后真实使用过)
+    # 次数仅作为预筛门槛; 连续误选也可能达到门槛, 写入前仍需人工审核
     if count < min_count:
         filtered['min_count'] += 1
         continue
@@ -209,22 +248,63 @@ for line in open(user_dict, encoding='utf-8'):
     if key not in new_words or new_words[key] < count:
         new_words[key] = count
 
-# 生成新词条, 权重降序
-entries = [(map_weight(c), w, p) for (w, p), c in new_words.items()]
-entries.sort(key=lambda x: -x[0])
+# 审核词单不能绕过过滤; 全部校验通过后才允许写文件
+if args.approved:
+    approved = set()
+    try:
+        with open(args.approved, encoding='utf-8') as f:
+            for lineno, line in enumerate(f, 1):
+                if not line.strip() or line.lstrip().startswith('#'):
+                    continue
+                parts = line.rstrip('\n').split('\t')
+                if len(parts) != 2 or not all(part.strip() for part in parts):
+                    parser.error(f"{args.approved}:{lineno}: 需要 词<TAB>拼音 两列")
+                word = parts[0].strip()
+                pinyin = normalize_pinyin(parts[1], word)
+                if has_junk(word, pinyin):
+                    parser.error(f"{args.approved}:{lineno}: 词或拼音含非法字符")
+                key = (word, pinyin)
+                if key not in new_words and key not in repo_exact:
+                    parser.error(f"{args.approved}:{lineno}: 非合格候选或拼音不匹配: {word} / {pinyin}")
+                approved.add(key)
+    except OSError as e:
+        parser.error(f"读取审核词单失败: {e}")
+    new_words = {key: count for key, count in new_words.items() if key in approved}
 
-# 追加到 extra 末尾 (不重排已有词条)
-new_lines = [f"{w}\t{p}\t{x}\n" for x, w, p in entries]
-with open(extra, 'a', encoding='utf-8') as f:
-    f.writelines(new_lines)
+# 生成新词条, 权重降序, 同权重时保证输出稳定
+entries = [(map_weight(c), w, p) for (w, p), c in new_words.items()]
+entries.sort(key=lambda x: (-x[0], x[1], x[2]))
+
+if args.write and entries:
+    # 保留原顺序和权限, 原子替换避免写入中断留下半个词条
+    with open(extra, encoding='utf-8') as f:
+        content = f.read()
+    if content and not content.endswith('\n'):
+        content += '\n'
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8',
+                                         dir=os.path.dirname(extra), delete=False) as f:
+            tmp_path = f.name
+            os.fchmod(f.fileno(), stat.S_IMODE(os.stat(extra).st_mode))
+            f.write(content)
+            f.writelines(f"{w}\t{p}\t{x}\n" for x, w, p in entries)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, extra)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            os.unlink(tmp_path)
 
 # --- 输出统计 ---
-print(f"新增 {len(entries)} 个用户词到 feibai.extra.dict.yaml (min-count={min_count})")
-if entries:
-    preview = "  ".join(f"{w}={x}" for x, w, p in entries[:5])
-    print(f"  权重最高: {preview}")
+mode = "已写入" if args.write else "仅预览, 未写入"
+print(f"{mode}: {len(entries)} 个候选词 (min-count={min_count})")
+print("词\t拼音\t次数\t权重")
+for weight, word, pinyin in entries:
+    print(f"{word}\t{pinyin}\t{new_words[(word, pinyin)]}\t{weight}")
 print(f"已过滤 {len(filtered['junk'])} 个含杂质词: {', '.join(filtered['junk'][:10])}")
 print(f"已过滤 {len(filtered['title'])} 个人名/称呼词: {', '.join(filtered['title'][:10])}")
 print(f"已过滤 {len(filtered['exclude'])} 个排除清单词: {', '.join(filtered['exclude'][:10])}")
-print(f"已过滤 {filtered['min_count']} 个低频词 (c<{min_count}, 多为误打碎片/迁移虚高)")
+print(f"已过滤 {filtered['min_count']} 个低频词 (c<{min_count}; 次数不代表语义正确)")
 PYEOF

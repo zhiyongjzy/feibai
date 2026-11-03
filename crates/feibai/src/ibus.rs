@@ -159,23 +159,6 @@ impl FeibaiEngine {
         Self::hide_lookup_table(&emitter).await.ok();
     }
 
-    // ibus-daemon calls Destroy when the input context goes away. Unregister
-    // ourselves — without this every CreateEngine leaks a dbus object for the
-    // lifetime of the process (observed: 5000+ engines over ~3 weeks).
-    #[zbus(name = "Destroy")]
-    async fn destroy(&self, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) {
-        let path = emitter.path().to_string();
-        log_info!("engine destroyed at {}", path);
-        if let Err(e) = emitter
-            .connection()
-            .object_server()
-            .remove::<FeibaiEngine, _>(path.as_str())
-            .await
-        {
-            log_error!("failed to remove engine {}: {}", path, e);
-        }
-    }
-
     #[zbus(name = "Enable")]
     async fn enable(&self) {}
 
@@ -233,6 +216,27 @@ impl FeibaiEngine {
     async fn hide_lookup_table(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
+struct FeibaiService;
+
+#[interface(name = "org.freedesktop.IBus.Service")]
+impl FeibaiService {
+    // IBusProxy destroys engines through Service, not the Engine interface.
+    #[zbus(name = "Destroy")]
+    async fn destroy(
+        &self,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        let path = emitter.path().to_string();
+        let server = emitter.connection().object_server();
+        server.remove::<FeibaiEngine, _>(path.as_str()).await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("remove engine {path}: {e}")))?;
+        server.remove::<FeibaiService, _>(path.as_str()).await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("remove service {path}: {e}")))?;
+        log_info!("engine destroyed at {}", path);
+        Ok(())
+    }
+}
+
 // IBus Factory implementation
 
 struct FeibaiFactory {
@@ -260,6 +264,14 @@ impl FeibaiFactory {
             .at(path.as_str(), engine_obj)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        if let Err(e) = self.conn.object_server().at(path.as_str(), FeibaiService).await {
+            if let Err(cleanup) = self.conn.object_server()
+                .remove::<FeibaiEngine, _>(path.as_str()).await
+            {
+                log_error!("failed to remove partially registered engine {path}: {cleanup}");
+            }
+            return Err(zbus::fdo::Error::Failed(e.to_string()));
+        }
 
         log_info!("engine created at {}", path);
         Ok(zvariant::OwnedObjectPath::try_from(path).unwrap())
@@ -375,39 +387,32 @@ mod tests {
                 }
             };
 
-            let engine = PinyinEngine::from_files(&[TEST_DICT]).unwrap();
-            let path = "/org/freedesktop/IBus/Engine/feibai_test_destroy";
-            conn.object_server()
-                .at(path, FeibaiEngine {
-                    engine: Arc::new(Mutex::new(engine)),
-                })
-                .await
-                .unwrap();
-
+            let factory = FeibaiFactory {
+                engine: Arc::new(Mutex::new(PinyinEngine::from_files(&[TEST_DICT]).unwrap())),
+                engine_count: Arc::new(Mutex::new(0)),
+                conn: conn.clone(),
+            };
+            let client = connection::Builder::session().unwrap().build().await.unwrap();
             let dest = conn.unique_name().unwrap().to_string();
-            let proxy = zbus::Proxy::new(
-                &conn,
-                dest.as_str(),
-                path,
-                "org.freedesktop.IBus.Engine",
-            )
-            .await
-            .unwrap();
+            for _ in 0..20 {
+                let path = factory.create_engine("feibai").await.unwrap();
+                let proxy = zbus::Proxy::new(
+                    &client, dest.as_str(), path.as_str(), "org.freedesktop.IBus.Engine",
+                ).await.unwrap();
+                let alive: zbus::Result<()> = proxy.call("FocusIn", &()).await;
+                alive.expect("FocusIn should succeed before Destroy");
 
-            // Object is alive before Destroy
-            let alive: zbus::Result<()> = proxy.call("FocusIn", &()).await;
-            alive.expect("FocusIn should succeed before Destroy");
+                let service = zbus::Proxy::new(
+                    &client, dest.as_str(), path.as_str(), "org.freedesktop.IBus.Service",
+                ).await.unwrap();
+                let destroyed: zbus::Result<()> = service.call("Destroy", &()).await;
+                destroyed.expect("IBus.Service.Destroy should succeed");
 
-            // Destroy must be implemented and succeed
-            let destroyed: zbus::Result<()> = proxy.call("Destroy", &()).await;
-            destroyed.expect("Destroy should succeed");
-
-            // Object is gone after Destroy
-            let gone: zbus::Result<()> = proxy.call("FocusIn", &()).await;
-            assert!(
-                gone.is_err(),
-                "FocusIn after Destroy should fail (object unregistered), got Ok"
-            );
+                let gone: zbus::Result<()> = proxy.call("FocusIn", &()).await;
+                assert!(gone.is_err(), "engine must be unregistered after Service.Destroy");
+                let gone: zbus::Result<()> = service.call("Destroy", &()).await;
+                assert!(gone.is_err(), "service must also be unregistered");
+            }
         })
     }
 }
