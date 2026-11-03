@@ -3,7 +3,7 @@
 # 来源：人工整理，MIT 协议
 ---
 name: feibai.extra
-version: "2026-09-17"
+version: "2026-11-02"
 sort: by_weight
 columns:
   - text
@@ -3238,3 +3238,14 @@ emo	e m o	5000
 不要纠结	bu yao jiu jie	20000
 并不是	bing bu shi	20000
 别有	bie you	20000
+看懂	kan dong	20000
+挪到	nuo dao	20000
+倒是	dao shi	20000
+鸭脖	ya bo	20000
+修掉	xiu diao	20000
+不好用	bu hao yong	20000
+哦豁	o huo	20000
+贼快	zei kuai	20000
+给到	gei dao	20000
+过不了	guo bu liao	20000
+没时间	mei shi jian	20000

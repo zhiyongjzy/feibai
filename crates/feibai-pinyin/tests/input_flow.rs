@@ -5,6 +5,7 @@ use feibai_pinyin::PinyinEngine;
 
 const BASE_DICT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/dicts/feibai.base.dict.yaml");
 const EXTRA_DICT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/dicts/feibai.extra.dict.yaml");
+const TECH_DICT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/dicts/feibai.tech.dict.yaml");
 
 fn make_engine() -> PinyinEngine {
     PinyinEngine::from_files(&[BASE_DICT, EXTRA_DICT]).unwrap()
@@ -75,6 +76,27 @@ fn last_candidates(actions: &[EngineAction]) -> Vec<String> {
 }
 
 // --- Full sentence input flows ---
+
+#[test]
+fn flow_reviewed_vocabulary_is_available() {
+    let mut engine = PinyinEngine::from_files(&[BASE_DICT, EXTRA_DICT, TECH_DICT]).unwrap();
+    for (input, word) in [
+        ("jingzhen", "晶振"), ("bixian", "必现"), ("tipiao", "提票"),
+        ("quanliang", "全量"), ("gongzuomulu", "工作目录"), ("shebeishu", "设备树"),
+        ("xitongshizhong", "系统时钟"), ("xitongshijian", "系统时间"), ("weidaima", "伪代码"),
+        ("kandong", "看懂"), ("nuodao", "挪到"), ("daoshi", "倒是"), ("yabo", "鸭脖"),
+        ("xiudiao", "修掉"), ("buhaoyong", "不好用"), ("ohuo", "哦豁"),
+        ("zeikuai", "贼快"), ("geidao", "给到"), ("guobuliao", "过不了"), ("meishijian", "没时间"),
+    ] {
+        engine.reset();
+        let mut actions = Vec::new();
+        for c in input.chars() {
+            actions = press(&mut engine, c);
+        }
+        let candidates = last_candidates(&actions);
+        assert!(candidates.iter().any(|c| c == word), "{input} should offer {word}: {candidates:?}");
+    }
+}
 
 #[test]
 fn flow_type_nihao_and_commit() {

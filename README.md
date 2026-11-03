@@ -106,6 +106,10 @@ exec feibai
 | = / - 或 PageDown / PageUp | 翻页 |
 | ' | 拼音分隔符（如 xi'an） |
 
+`lue/lve`、`nue/nve` 均可输入，选词学习使用同一份计数；例如 `culue` 和 `culve` 都能查到“粗略”。原始拼音显示不变。
+
+连续输入中孤立的 `m/n` 不参与自动组句，避免 `zenm` 生成“怎呣”；仍保留正常词和前缀补全候选。单独的 `m/n` 音节照常可用，需要明确组合时可用分隔符，如 `zen'm`。
+
 ## 配置
 
 配置文件：`~/.config/feibai/config.toml`
@@ -127,11 +131,21 @@ theme = "dark"   # light/dark/flat/blue/sakura/ocean/lavender/tangerine/mint
 
 ### 同步用户词库到仓库
 
-`user.dict.txt` 里积累的用户新词（本地自动学习）可以同步回仓库的 `feibai.extra.dict.yaml`，方便提交到 Git 分享给其他用户：
+`user.dict.txt` 里积累的用户新词（本地自动学习）可以同步回仓库的 `feibai.extra.dict.yaml`。**默认仅预览，不修改词库**，列出所有候选的词、拼音、次数和建议权重：
 
 ```bash
 ./tools/sync_user_dict.sh
 ```
+
+人工审核后创建两列 TSV 词单（`词<TAB>拼音`，不是预览的四列输出；支持空行、`#` 注释和空格分隔拼音），再显式写入：
+
+```bash
+printf '晶振\tjing zhen\n' > /tmp/feibai-approved.tsv
+./tools/sync_user_dict.sh --approved /tmp/feibai-approved.tsv  # 仍然只预览
+./tools/sync_user_dict.sh --write --approved /tmp/feibai-approved.tsv
+```
+
+审核词必须来自合格用户词候选，拼音也必须匹配；任何不匹配都会在写入前报错。默认 `--min-count 3`，可用 `--min-count 1` 审核低频词。**次数只是预筛门槛，不保证语义正确**：短时间反复误选也可能超过门槛，不能整批照收。此工具不删除或更改本地学习记录。
 
 特性：
 
@@ -175,7 +189,8 @@ ibus restart
 ## 测试
 
 ```bash
-cargo test
+dbus-run-session -- cargo test --workspace
+python3 -m unittest discover -s tools -p 'test_*.py'
 ```
 
 ## License
